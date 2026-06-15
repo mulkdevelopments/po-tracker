@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
@@ -14,6 +14,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 type LineForm = Record<string, string>;
 type Product = ReferenceData["products"][number];
+type DuplicatePo = { id: number; poNo: string; rev: number; status?: string | null };
 
 const toStr = (v: unknown) => (v == null ? "" : String(v));
 
@@ -39,6 +40,7 @@ export default function UploadPage() {
   const [active, setActive] = useState(true);
   const [lines, setLines] = useState<LineForm[]>([]);
   const [status, setStatus] = useState("");
+  const [duplicate, setDuplicate] = useState<DuplicatePo | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -68,6 +70,25 @@ export default function UploadPage() {
     }
     setForm((f) => ({ ...f, [k]: v }));
   };
+
+  const checkDuplicate = useCallback(async (poNo: string, revRaw: string) => {
+    const trimmed = poNo.trim();
+    if (!trimmed) {
+      setDuplicate(null);
+      return;
+    }
+    const rev = Math.round(Number(revRaw || 0)) || 0;
+    try {
+      const { exists, po } = await api.checkOrderExists(trimmed, rev);
+      setDuplicate(exists && po ? po : null);
+    } catch {
+      setDuplicate(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkDuplicate(form.poNo, form.rev ?? "0");
+  }, [form.poNo, form.rev, checkDuplicate]);
 
   // Recompute derived line numbers (m²/MSF/value) from sheets + product/dims.
   const computeLine = (row: LineForm): LineForm => {
@@ -214,6 +235,10 @@ export default function UploadPage() {
       alert("PO number is required");
       return;
     }
+    if (duplicate) {
+      alert(`PO ${duplicate.poNo}${duplicate.rev ? ` (rev ${duplicate.rev})` : ""} already exists. Open it in Order Summary to update it.`);
+      return;
+    }
     setSaving(true);
     try {
       const payload: Record<string, unknown> = { ...form, active };
@@ -312,7 +337,24 @@ export default function UploadPage() {
             </button>
           </div>
         </div>
-        {status && <div className="text-xs text-slate-600 mt-3">{status}</div>}
+        {status && !duplicate && <div className="text-xs text-slate-600 mt-3">{status}</div>}
+        {duplicate && (
+          <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <div className="font-medium">This PO already exists in the tracker.</div>
+            <div className="mt-1">
+              PO <span className="font-mono font-semibold">{duplicate.poNo}</span>
+              {duplicate.rev ? <span className="text-amber-800"> rev {duplicate.rev}</span> : null}
+              {duplicate.status ? <span className="text-amber-800"> · {duplicate.status}</span> : null}
+            </div>
+            <div className="mt-2 text-xs text-amber-800">
+              Upload was decoded, but saving is blocked to prevent a duplicate.{" "}
+              <Link to="/orders" className="font-medium underline hover:text-amber-950">
+                Open Order Summary
+              </Link>{" "}
+              to view or edit the existing PO.
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 p-5">
@@ -378,8 +420,8 @@ export default function UploadPage() {
         </div>
 
         <div className="flex justify-end gap-2 mt-4">
-          <button type="button" disabled={saving} onClick={save} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-50">
-            {saving ? "Saving…" : "Save PO to tracker"}
+          <button type="button" disabled={saving || !!duplicate} onClick={save} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-50">
+            {duplicate ? "PO already exists" : saving ? "Saving…" : "Save PO to tracker"}
           </button>
         </div>
       </div>

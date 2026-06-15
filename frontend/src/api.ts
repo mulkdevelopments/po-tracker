@@ -94,6 +94,11 @@ export const api = {
 
   getOrder: (id: number) => request<{ po: PurchaseOrder }>(`/orders/${id}${companyParam()}`),
 
+  checkOrderExists: (poNo: string, rev = 0) =>
+    request<{ exists: boolean; po?: Pick<PurchaseOrder, "id" | "poNo" | "rev" | "status"> }>(
+      `/orders/exists${companyParam({ poNo, rev: String(rev || 0) })}`,
+    ),
+
   createOrder: (data: Record<string, unknown>) =>
     request<{ po: PurchaseOrder }>(`/orders${companyParam()}`, {
       method: "POST",

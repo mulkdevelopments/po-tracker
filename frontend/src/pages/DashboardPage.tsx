@@ -6,12 +6,24 @@ import type { PurchaseOrder, ReferenceData, AppConfigData } from "../types";
 import { fmtMoney, fmtNum } from "../utils";
 import { computeDashboard, statusMix, totalRow, type VolumeRow } from "../reports";
 import { StatusDoughnut, AnnualSalesPanel, CapacityPanel } from "../components/DashboardCharts";
+import PoDrawer from "../components/PoDrawer";
+import type { MasterData } from "../types";
 
 function shortLoc(l: string) {
   return l.split(",")[0];
 }
 
-function StatusDetailModal({ status, pos, onClose }: { status: string; pos: PurchaseOrder[]; onClose: () => void }) {
+function StatusDetailModal({
+  status,
+  pos,
+  onClose,
+  onSelectPo,
+}: {
+  status: string;
+  pos: PurchaseOrder[];
+  onClose: () => void;
+  onSelectPo: (po: PurchaseOrder) => void;
+}) {
   const matches = pos.filter((p) => p.active !== false && p.status === status);
   const totalValue = matches.reduce((s, p) => s + (Number(p.poValue) || 0), 0);
   const totalM2 = matches.reduce((s, p) => s + (Number(p.totalM2) || 0), 0);
@@ -30,8 +42,12 @@ function StatusDetailModal({ status, pos, onClose }: { status: string; pos: Purc
             </thead>
             <tbody>
               {matches.map((p) => (
-                <tr key={p.id}>
-                  <td className="font-mono">{p.poNo}</td>
+                <tr
+                  key={p.id}
+                  className="cursor-pointer hover:bg-slate-50"
+                  onClick={() => onSelectPo(p)}
+                >
+                  <td className="font-mono font-semibold text-slate-900">{p.poNo}</td>
                   <td>{p.stockingLocation || "—"}</td>
                   <td>{p.poDate || "—"}</td>
                   <td className="text-right">{fmtNum(p.totalM2, 0)}</td>
@@ -94,15 +110,23 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [year, setYear] = useState(new Date().getFullYear());
   const [statusDetail, setStatusDetail] = useState<string | null>(null);
+  const [selected, setSelected] = useState<PurchaseOrder | null>(null);
+  const [master, setMaster] = useState<MasterData>({});
 
   useEffect(() => {
-    Promise.all([api.getOrders(), api.getReference()]).then(([o, r]) => {
+    Promise.all([api.getOrders(), api.getReference(), api.getSettings()]).then(([o, r, settings]) => {
       setPos(o.pos);
       setRef(r);
       setConfig(r.config);
+      setMaster(settings.master);
       setLoading(false);
     });
   }, []);
+
+  const openPoFromStatusModal = (po: PurchaseOrder) => {
+    setStatusDetail(null);
+    setSelected(po);
+  };
 
   if (loading || !ref) return <div className="text-slate-500">Loading dashboard…</div>;
 
@@ -220,7 +244,30 @@ export default function DashboardPage() {
       </div>
 
       {statusDetail && (
-        <StatusDetailModal status={statusDetail} pos={pos} onClose={() => setStatusDetail(null)} />
+        <StatusDetailModal
+          status={statusDetail}
+          pos={pos}
+          onClose={() => setStatusDetail(null)}
+          onSelectPo={openPoFromStatusModal}
+        />
+      )}
+
+      {selected && user && (
+        <PoDrawer
+          po={selected}
+          user={user}
+          master={master}
+          onClose={() => setSelected(null)}
+          onUpdated={(po) => {
+            setPos((prev) => prev.map((x) => (x.id === po.id ? po : x)));
+            setSelected(po);
+          }}
+          onDeleted={(id) => {
+            setPos((prev) => prev.filter((x) => x.id !== id));
+            setSelected(null);
+          }}
+          canEdit={canEdit()}
+        />
       )}
     </div>
   );

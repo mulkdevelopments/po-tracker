@@ -17,6 +17,17 @@ async function findPoForCompany(id: number, company: ReturnType<typeof parseComp
   });
 }
 
+async function findPoByNumber(
+  company: ReturnType<typeof parseCompany>,
+  poNo: string,
+  rev: number,
+) {
+  return prisma.purchaseOrder.findFirst({
+    where: { company, poNo: poNo.trim(), rev },
+    select: { id: true, poNo: true, rev: true, status: true },
+  });
+}
+
 // Accept "" as null and coerce numeric strings, so the edit form can post freely.
 const numField = z.preprocess(
   (v) => (v === "" || v === null || v === undefined ? null : typeof v === "string" ? Number(v) : v),
@@ -127,6 +138,16 @@ router.get("/", requireAuth, requirePage("orders"), async (req, res) => {
   res.json({ pos, company });
 });
 
+router.get("/exists", requireAuth, requirePage("upload"), async (req, res) => {
+  const company = getCompany(req);
+  const poNo = String(req.query.poNo ?? "").trim();
+  const rev = Math.round(Number(req.query.rev ?? 0)) || 0;
+  if (!poNo) return res.status(400).json({ error: "poNo is required" });
+  const existing = await findPoByNumber(company, poNo, rev);
+  if (!existing) return res.json({ exists: false });
+  res.json({ exists: true, po: existing });
+});
+
 router.get("/export", requireAuth, requirePage("orders"), async (req, res) => {
   const company = getCompany(req);
   const pos = await prisma.purchaseOrder.findMany({
@@ -151,6 +172,14 @@ router.post("/", requireAuth, requirePage("upload"), requireWrite, async (req, r
     return res.status(400).json({ error: parsed.error.flatten() });
   }
   const data = parsed.data;
+  const existing = await findPoByNumber(company, data.poNo, data.rev);
+  if (existing) {
+    const revLabel = existing.rev ? ` (rev ${existing.rev})` : "";
+    return res.status(409).json({
+      error: `PO ${existing.poNo}${revLabel} already exists in the tracker. Open it in Order Summary to update it.`,
+      po: existing,
+    });
+  }
   const { lines, ...poData } = data;
   const po = await prisma.purchaseOrder.create({
     data: {
