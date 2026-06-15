@@ -1,3 +1,5 @@
+# Render Blueprint — backend API + Postgres only.
+# The frontend is deployed separately on Vercel (see frontend/vercel.json).
 databases:
   - name: po-tracker-db
     plan: free
@@ -6,11 +8,12 @@ databases:
 
 services:
   - type: web
-    name: po-tracker
-    runtime: docker
+    name: po-tracker-api
+    runtime: node
     plan: free
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    rootDir: backend
+    buildCommand: npm ci && npm run build && npx prisma generate
+    startCommand: npx prisma migrate deploy && node dist/seed.js && node dist/index.js
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
@@ -23,9 +26,7 @@ services:
         sync: false
       - key: SUPER_ADMIN_PASSWORD
         sync: false
+      - key: FRONTEND_URL
+        sync: false # set to your Vercel URL, e.g. https://po-tracker.vercel.app
       - key: NODE_ENV
         value: production
-      - key: FRONTEND_URL
-        sync: false
-      - key: PORT
-        value: "4000"

@@ -2,6 +2,9 @@ import type { AuthUser, PurchaseOrder, MasterData, PricingData, AppUser, Referen
 import type { Company } from "./companies";
 
 const TOKEN_KEY = "po_tracker_token";
+// In production (Vercel) point at the Render API via VITE_API_URL.
+// In dev this stays empty and requests go through the Vite proxy to :4000.
+const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 let currentCompany: Company = "UFP";
 
 export function setApiCompany(company: Company) {
@@ -39,7 +42,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${API_BASE}/api${path}`, {
     ...options,
     headers,
     credentials: "include",

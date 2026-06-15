@@ -18,9 +18,26 @@ const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
 app.use(helmet({ contentSecurityPolicy: false }));
+
+// Allow the configured frontend origin(s) plus Vercel preview deployments.
+// FRONTEND_URL may be a comma-separated list.
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin(origin, cb) {
+      if (!origin) return cb(null, true); // same-origin / curl / mobile
+      let host = "";
+      try {
+        host = new URL(origin).hostname;
+      } catch {
+        return cb(null, false);
+      }
+      const ok = allowedOrigins.includes(origin) || host.endsWith(".vercel.app");
+      return cb(null, ok);
+    },
     credentials: true,
   }),
 );
