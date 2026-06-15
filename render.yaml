@@ -1,0 +1,31 @@
+databases:
+  - name: po-tracker-db
+    plan: free
+    databaseName: potracker
+    user: potracker
+
+services:
+  - type: web
+    name: po-tracker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: po-tracker-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        sync: false
+      - key: PORT
+        value: "4000"

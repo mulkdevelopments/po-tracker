@@ -1,0 +1,1469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UFP Order Tracker</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .stage-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .tbl th { background:#f8fafc; font-weight:600; font-size:11px; text-transform:uppercase; color:#475569; border-bottom:1px solid #e2e8f0; padding:8px 10px; text-align:left; position:sticky; top:0; }
+  .tbl td { padding:8px 10px; border-bottom:1px solid #f1f5f9; font-size:13px; vertical-align:top; }
+  .tbl tr:hover td { background:#f8fafc; }
+  .pipeline-step { flex:1; padding:6px 4px; text-align:center; font-size:10px; color:#94a3b8; border-bottom:3px solid #e2e8f0; }
+  .pipeline-step.done { color:#16a34a; border-color:#16a34a; }
+  .pipeline-step.current { color:#2563eb; border-color:#2563eb; font-weight:600; }
+  .drawer { transition: transform .25s ease; }
+  .role-badge { font-size:11px; padding:2px 8px; border-radius:6px; background:#eef2ff; color:#4338ca; }
+  details > summary { cursor:pointer; list-style:none; }
+  details > summary::-webkit-details-marker { display:none; }
+  .scroll-fade { mask-image: linear-gradient(to bottom, black 90%, transparent 100%); }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+<!-- TOP BAR -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+  <div class="max-w-[1600px] mx-auto px-6 py-3 flex items-center gap-4">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-indigo-600 text-white grid place-items-center font-bold">U</div>
+      <div>
+        <div class="font-semibold text-slate-900 leading-tight">UFP Order Tracker</div>
+        <div class="text-[11px] text-slate-500 leading-tight">PO → Production → Shipping → Delivery</div>
+      </div>
+    </div>
+    <nav class="ml-6 flex gap-1" id="tabnav">
+      <button data-tab="dashboard" class="tab-btn px-3 py-2 text-sm rounded-md hover:bg-slate-100">Dashboard</button>
+      <button data-tab="orders" class="tab-btn px-3 py-2 text-sm rounded-md hover:bg-slate-100">Orders</button>
+      <button data-tab="upload" class="tab-btn px-3 py-2 text-sm rounded-md hover:bg-slate-100">Upload PO</button>
+      <button data-tab="items" class="tab-btn px-3 py-2 text-sm rounded-md hover:bg-slate-100">Item Summary</button>
+      <button data-tab="pricing" class="tab-btn px-3 py-2 text-sm rounded-md hover:bg-slate-100">Pricing</button>
+      <button data-tab="master" class="tab-btn px-3 py-2 text-sm rounded-md hover:bg-slate-100">Master Data</button>
+    </nav>
+    <div class="ml-auto flex items-center gap-3">
+      <select id="roleSwitcher" class="text-sm border border-slate-300 rounded-md px-2 py-1.5 bg-white">
+        <option value="HQ_SALES">HQ / Sales</option>
+        <option value="UAE_JEBEL_ALI">UAE – Jebel Ali</option>
+        <option value="UAE_SHARJAH">UAE – Sharjah</option>
+        <option value="UAE_ABU_DHABI">UAE – Abu Dhabi</option>
+        <option value="LOGISTICS">Logistics</option>
+        <option value="VIEWER">Viewer (read-only)</option>
+      </select>
+      <span id="roleBadge" class="role-badge">HQ / Sales</span>
+      <div class="relative">
+        <button id="menuBtn" class="px-2 py-1.5 text-sm rounded-md border border-slate-300 hover:bg-slate-100">⋯</button>
+        <div id="menuDropdown" class="hidden absolute right-0 mt-1 w-48 bg-white border border-slate-200 rounded-md shadow-lg text-sm z-40">
+          <button class="block w-full text-left px-3 py-2 hover:bg-slate-50" onclick="exportData()">Export data (JSON)</button>
+          <button class="block w-full text-left px-3 py-2 hover:bg-slate-50" onclick="document.getElementById('importFile').click()">Import data (JSON)</button>
+          <button class="block w-full text-left px-3 py-2 hover:bg-slate-50" onclick="exportCsv()">Export Orders CSV</button>
+          <button class="block w-full text-left px-3 py-2 hover:bg-slate-50 text-red-600" onclick="resetData()">Reset to sample data</button>
+          <input type="file" id="importFile" accept="application/json" class="hidden" onchange="importData(event)">
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-[1600px] mx-auto px-6 py-6" id="main">
+  <!-- Tabs will be rendered here -->
+</main>
+
+<!-- DRAWER (PO detail) -->
+<div id="drawerOverlay" class="hidden fixed inset-0 bg-black/30 z-40" onclick="closeDrawer()"></div>
+<aside id="drawer" class="drawer fixed top-0 right-0 h-full w-[720px] max-w-full bg-white shadow-2xl z-50 translate-x-full overflow-y-auto"></aside>
+
+<!-- TOAST -->
+<div id="toast" class="hidden fixed bottom-6 right-6 bg-slate-900 text-white text-sm px-4 py-2 rounded-md shadow-lg z-50"></div>
+
+<script>
+/* ============================================================
+   SEED DATA — extracted from your "UFP Order Tracker.xlsx"
+   ============================================================ */
+const SEED = {"pos": [{"poNo": "52896147", "rev": 0, "status": "Telex / Seaway Released", "poDate": "2025-05-15", "active": true, "skids": 13, "stockingLocation": "Hillsboro, TX", "portOfDest": "Houston", "poValue": 61748, "totalM2": 8201.562, "piNo": "NX/PI/25/05/231", "piDate": "2025-07-29", "piValue": 61748, "dpDate": "2025-10-15", "dpAmount": 67248, "productionEtc": "2026-01-13", "shippingEta": "2025-09-04", "bol": "MAEU256577957", "isf": "Yes", "containerNo": "TRHU4810919", "shippingLine": "MAERSK", "shippingUrl": "", "actualDeparture": "2025-09-04", "ciNo": "EBT/2025/07/157", "ciDate": "2025-07-10", "freight": 4500, "inland": 1000, "ciValue": 67248, "balanceDue": 0, "bpDate": "N/A", "bpAmount": 0, "telexDate": "2025-09-02", "arrivalDate": "2025-09-05", "lines": [{"lineNo": 1, "partNo": "694432", "custPartNo": "G1S 694432", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 22.87, "qtyM2": 1822.68, "sheets": 600, "skids": 3, "unitMsf": 700, "unitM2": 7.53, "extPo": 13722, "leadTime": 45}, {"lineNo": 2, "partNo": "694434", "custPartNo": "G1S 694434", "size": "2MM 49\" x 144\" ACP", "widthMm": 1245, "lengthMm": 3658, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 34.3, "qtyM2": 910.8420000000001, "sheets": 200, "skids": 1, "unitMsf": 700, "unitM2": 7.53, "extPo": 6860, "leadTime": 45}, {"lineNo": 3, "partNo": "694436", "custPartNo": "G1S 694436", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 22.87, "qtyM2": 1822.68, "sheets": 600, "skids": 3, "unitMsf": 700, "unitM2": 7.53, "extPo": 13722, "leadTime": 45}]}, {"poNo": "52896149", "rev": 0, "status": "Telex / Seaway Released", "poDate": "2025-05-15", "active": true, "skids": 12, "stockingLocation": "Hillsboro, TX", "portOfDest": "Houston", "poValue": 63466, "totalM2": 8429.397, "piNo": "NX/PI/25/05/230", "piDate": "2025-07-29", "piValue": 64580.64, "dpDate": "2025-10-15", "dpAmount": 68965.98, "productionEtc": "2026-01-13", "shippingEta": "2025-09-04", "bol": "MAEU256577956", "isf": "Yes", "containerNo": "TIIU5539094", "shippingLine": "MAERSK", "shippingUrl": "", "actualDeparture": "2025-09-04", "ciNo": "EBT/2025/07/156", "ciDate": "2025-07-10", "freight": 4500, "inland": 1000, "ciValue": 68965.98, "balanceDue": 0, "bpDate": "N/A", "bpAmount": 0, "telexDate": "2025-09-01", "arrivalDate": "2025-09-04", "lines": [{"lineNo": 1, "partNo": "694433", "custPartNo": "G1S 694433", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 22.05, "qtyM2": 2050.5150000000003, "sheets": 600, "skids": 3, "unitMsf": 700, "unitM2": 7.53, "extPo": 15438, "leadTime": 45}, {"lineNo": 2, "partNo": "694437", "custPartNo": "G1S 694437", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 22.05, "qtyM2": 2050.5150000000003, "sheets": 600, "skids": 3, "unitMsf": 700, "unitM2": 7.53, "extPo": 15438, "leadTime": 45}, {"lineNo": 3, "partNo": "694438", "custPartNo": "G1S 694438", "size": "2MM 49\" x 144\" ACP", "widthMm": 1245, "lengthMm": 3658, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 9.8, "qtyM2": 910.8420000000001, "sheets": 200, "skids": 1, "unitMsf": 700, "unitM2": 7.53, "extPo": 6860, "leadTime": 45}]}, {"poNo": "24104818", "rev": 0, "status": "Balance Payment Received", "poDate": "2025-11-03", "active": true, "skids": 15, "stockingLocation": "Granger, IN", "portOfDest": "Baltimore", "poValue": 64669.5, "totalM2": 8590.5, "piNo": "NX/PI/25/09/970", "piDate": "2025-11-04", "piValue": 64686.47, "dpDate": "2025-11-14", "dpAmount": 32343.24, "productionEtc": "2026-02-12", "shippingEta": "2026-03-11", "bol": "HLCUDX3260111506", "isf": "Yes", "containerNo": "CAAU6796532", "shippingLine": "HAPAG LLOYD", "shippingUrl": null, "actualDeparture": "2026-01-17", "ciNo": "EBT/2025/12/335", "ciDate": "2025-12-31", "freight": 4500, "inland": 1000, "ciValue": 70186.47, "balanceDue": 37843.229999999996, "bpDate": "2026-01-15", "bpAmount": 37843.23, "telexDate": null, "arrivalDate": "2026-03-25", "lines": [{"lineNo": 1, "partNo": "709354", "custPartNo": "G1S 709354", "size": "2MM 49\" x 90.5\" ACP", "widthMm": 1245, "lengthMm": 2300, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 49.272, "qtyM2": 4581.6, "sheets": 1600, "skids": 8, "unitMsf": 700, "unitM2": 7.53, "extPo": 34490.4, "leadTime": 45}, {"lineNo": 2, "partNo": "709525", "custPartNo": "G1S 709525", "size": "2MM 49\" x 90.5\" ACP", "widthMm": 1245, "lengthMm": 2300, "color": "AMC 0103 SILVER FROST", "qtyMsf": 43.113, "qtyM2": 4008.9, "sheets": 1400, "skids": 7, "unitMsf": 700, "unitM2": 7.53, "extPo": 30179.1, "leadTime": 90}]}, {"poNo": "24116019", "rev": 0, "status": "Balance Payment Received", "poDate": "2025-11-03", "active": true, "skids": 11, "stockingLocation": "Granger, IN", "portOfDest": "Baltimore", "poValue": 62597.5, "totalM2": 8200.068000000001, "piNo": "NX/PI/25/09/971", "piDate": "2025-11-04", "piValue": 62607.46, "dpDate": "2025-11-14", "dpAmount": 31303.73, "productionEtc": "2026-02-12", "shippingEta": "2026-03-11", "bol": "HLCUDX3260111488", "isf": "Yes", "containerNo": "FANU1810168", "shippingLine": "HAPAG LLOYD", "shippingUrl": null, "actualDeparture": "2026-01-17", "ciNo": "EBT/2026/01/007", "ciDate": "2026-01-12", "freight": 4500, "inland": 1000, "ciValue": 68107.45999999999, "balanceDue": 36803.729999999996, "bpDate": "2026-01-29", "bpAmount": 36803.73, "telexDate": null, "arrivalDate": "2026-03-25", "lines": [{"lineNo": 1, "partNo": "694432", "custPartNo": "G1S 694432", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 13.067, "qtyM2": 1215.1200000000001, "sheets": 400, "skids": 2, "unitMsf": 700, "unitM2": 7.53, "extPo": 9146.9, "leadTime": 45}, {"lineNo": 2, "partNo": "694433", "custPartNo": "G1S 694433", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 7.35, "qtyM2": 683.5050000000001, "sheets": 200, "skids": 1, "unitMsf": 700, "unitM2": 7.53, "extPo": 5145, "leadTime": 45}, {"lineNo": 3, "partNo": "694434", "custPartNo": "G1S 694434", "size": "2MM 49\" x 144\" ACP", "widthMm": 1245, "lengthMm": 3658, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 9.8, "qtyM2": 910.8420000000001, "sheets": 200, "skids": 1, "unitMsf": 700, "unitM2": 7.53, "extPo": 6860.000000000001, "leadTime": 45}]}, {"poNo": "24045976", "rev": 0, "status": "PO Revised", "poDate": "2025-08-19", "active": false, "skids": 0, "stockingLocation": "Ashburn, GA", "portOfDest": "Savannah", "poValue": 0, "totalM2": 0, "piNo": "NX/PI/25/08/920", "piDate": "2025-08-19", "piValue": 0, "dpDate": null, "dpAmount": null, "productionEtc": null, "shippingEta": null, "bol": null, "isf": null, "containerNo": null, "shippingLine": null, "shippingUrl": null, "actualDeparture": null, "ciNo": "EBT/2025/11/290", "ciDate": "2025-11-21", "freight": 4500, "inland": 1000, "ciValue": 5500, "balanceDue": 5500, "bpDate": null, "bpAmount": null, "telexDate": "2026-01-13", "arrivalDate": "2026-01-12", "lines": [{"lineNo": 1, "partNo": "694432", "custPartNo": "G1S 694432", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 65.333, "qtyM2": 6075.6, "sheets": 2000, "skids": 10, "unitMsf": 700, "unitM2": 7.53, "extPo": 45733.1, "leadTime": 45}, {"lineNo": 2, "partNo": "694433", "custPartNo": "G1S 694433", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 22.05, "qtyM2": 2050.5150000000003, "sheets": 600, "skids": 3, "unitMsf": 700, "unitM2": 7.53, "extPo": 15435, "leadTime": 45}, {"lineNo": 1, "partNo": "694432", "custPartNo": "G1S 694432", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 52.267, "qtyM2": 4860.4800000000005, "sheets": 1600, "skids": 8, "unitMsf": 700, "unitM2": 7.53, "extPo": 36586.9, "leadTime": 45}]}, {"poNo": "24045978", "rev": 0, "status": "PO Revised", "poDate": "2025-08-19", "active": false, "skids": 0, "stockingLocation": "Ashburn, GA", "portOfDest": "Savannah", "poValue": 0, "totalM2": 0, "piNo": "NX/PI/25/08/924", "piDate": "2025-08-19", "piValue": 0, "dpDate": null, "dpAmount": null, "productionEtc": null, "shippingEta": null, "bol": null, "isf": null, "containerNo": null, "shippingLine": null, "shippingUrl": null, "actualDeparture": null, "ciNo": "EBT/2025/10/242", "ciDate": "2025-10-08", "freight": 4500, "inland": 1000, "ciValue": 5500, "balanceDue": 5500, "bpDate": null, "bpAmount": null, "telexDate": null, "arrivalDate": null, "lines": [{"lineNo": 1, "partNo": "694436", "custPartNo": "G1S 694436", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 65.333, "qtyM2": 6075.6, "sheets": 2000, "skids": 10, "unitMsf": 700, "unitM2": 7.53, "extPo": 45733.1, "leadTime": 45}, {"lineNo": 2, "partNo": "694437", "custPartNo": "G1S 694437", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 22.05, "qtyM2": 2050.5150000000003, "sheets": 600, "skids": 3, "unitMsf": 700, "unitM2": 7.53, "extPo": 15435, "leadTime": 45}, {"lineNo": 1, "partNo": "694436", "custPartNo": "G1S 694436", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 52.267, "qtyM2": 4860.4800000000005, "sheets": 1600, "skids": 8, "unitMsf": 700, "unitM2": 7.53, "extPo": 36586.9, "leadTime": 45}]}, {"poNo": "52970952", "rev": 0, "status": "Downpayment Received", "poDate": "2025-11-24", "active": true, "skids": 12, "stockingLocation": "Nampa, ID", "portOfDest": "Oakland", "poValue": 62155.35, "totalM2": 8055.399000000001, "piNo": "NX/PI/25/08/985", "piDate": "2025-11-24", "piValue": 62174.27, "dpDate": "2025-12-09", "dpAmount": 31087.13, "productionEtc": "2026-03-09", "shippingEta": "2026-05-14", "bol": null, "isf": "No", "containerNo": null, "shippingLine": null, "shippingUrl": null, "actualDeparture": null, "ciNo": null, "ciDate": null, "freight": null, "inland": null, "ciValue": 62174.27, "balanceDue": 31087.139999999996, "bpDate": null, "bpAmount": null, "telexDate": null, "arrivalDate": null, "lines": [{"lineNo": 1, "partNo": "709525", "custPartNo": "G1S 709525", "size": "2MM 49\" x 90.5\" ACP", "widthMm": 1245, "lengthMm": 2300, "color": "AMC 0103 SILVER FROST", "qtyMsf": 12.318, "qtyM2": 1145.4, "sheets": 400, "skids": 2, "unitMsf": 700, "unitM2": 7.53, "extPo": 8622.6, "leadTime": 90}, {"lineNo": 2, "partNo": "694440", "custPartNo": "G1S 694440", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "AMC 0103 SILVER FROST", "qtyMsf": 6.533, "qtyM2": 607.5600000000001, "sheets": 200, "skids": 1, "unitMsf": 700, "unitM2": 7.53, "extPo": 4573.1, "leadTime": 90}, {"lineNo": 3, "partNo": "694441", "custPartNo": "G1S 694441", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "AMC 0103 SILVER FROST", "qtyMsf": 7.35, "qtyM2": 683.5050000000001, "sheets": 200, "skids": 1, "unitMsf": 700, "unitM2": 7.53, "extPo": 5145, "leadTime": 90}]}, {"poNo": "24143625", "rev": 0, "status": "Downpayment Received", "poDate": "2025-12-03", "active": true, "skids": 12, "stockingLocation": "Granger, IN", "portOfDest": "Baltimore", "poValue": 63210, "totalM2": 8202.060000000001, "piNo": "NX/PI/25/12/987", "piDate": "2025-12-04", "piValue": 63237.88, "dpDate": "2025-12-18", "dpAmount": 31618.94, "productionEtc": "2026-02-01", "shippingEta": "2026-03-31", "bol": null, "isf": "No", "containerNo": null, "shippingLine": null, "shippingUrl": null, "actualDeparture": null, "ciNo": null, "ciDate": null, "freight": null, "inland": null, "ciValue": 63237.88, "balanceDue": 31618.94, "bpDate": null, "bpAmount": null, "telexDate": null, "arrivalDate": null, "lines": [{"lineNo": 1, "partNo": "694673", "custPartNo": "G1S 694673", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "ASC 0089 VICTORY RED", "qtyMsf": 58.8, "qtyM2": 5468.040000000001, "sheets": 1600, "skids": 8, "unitMsf": 700, "unitM2": 7.53, "extPo": 41160, "leadTime": 45}, {"lineNo": 2, "partNo": "695621", "custPartNo": "G1S 695621", "size": "2MM 49\" x 108\" ACP", "widthMm": 1245, "lengthMm": 2745, "color": "ASC 0105 INDIGO BLUE", "qtyMsf": 29.4, "qtyM2": 2734.0200000000004, "sheets": 800, "skids": 4, "unitMsf": 750, "unitM2": 8.07, "extPo": 22050, "leadTime": 45}]}, {"poNo": "24160658", "rev": 0, "status": "In Production", "poDate": "2025-12-31", "active": true, "skids": 14, "stockingLocation": "Savannah, GA", "portOfDest": "Savannah", "poValue": 64026.9, "totalM2": 8505.84, "piNo": "NX/PI/26/01/997", "piDate": "2026-01-05", "piValue": 64048.98, "dpDate": "2026-01-30", "dpAmount": 32024.49, "productionEtc": "2026-03-16", "shippingEta": "2026-05-01", "bol": null, "isf": null, "containerNo": null, "shippingLine": null, "shippingUrl": null, "actualDeparture": null, "ciNo": null, "ciDate": null, "freight": null, "inland": null, "ciValue": 64048.98, "balanceDue": 32024.49, "bpDate": null, "bpAmount": null, "telexDate": null, "arrivalDate": null, "lines": [{"lineNo": 1, "partNo": "694436", "custPartNo": "G1S 694436", "size": "2MM 49\" x 96\" ACP", "widthMm": 1245, "lengthMm": 2440, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 91.467, "qtyM2": 8505.84, "sheets": 2800, "skids": 14, "unitMsf": 700, "unitM2": 7.53, "extPo": 64026.9, "leadTime": 45}]}, {"poNo": "24160674", "rev": 0, "status": "Commercial Invoice Sent", "poDate": "2025-12-31", "active": true, "skids": 9, "stockingLocation": "Savannah, GA", "portOfDest": "Savannah", "poValue": 61740, "totalM2": 8197.578000000001, "piNo": "NX/PI/26/01/999", "piDate": "2026-01-05", "piValue": 61727.76, "dpDate": "2026-01-30", "dpAmount": 30863.88, "productionEtc": "2026-03-16", "shippingEta": "2026-07-11", "bol": "MAEU270995404", "isf": "Yes", "containerNo": "TLLU6887408", "shippingLine": "MAERSK", "shippingUrl": "", "actualDeparture": "2026-06-03", "ciNo": "EBT/2026/05/162", "ciDate": "2026-05-22", "freight": 7800, "inland": 1000, "ciValue": 70527.76000000001, "balanceDue": 39663.880000000005, "bpDate": null, "bpAmount": null, "telexDate": null, "arrivalDate": null, "lines": [{"lineNo": 1, "partNo": "694434", "custPartNo": "G1S 694434", "size": "2MM 49\" x 144\" ACP", "widthMm": 1245, "lengthMm": 3658, "color": "ASC 0096 GLOSSY BLACK", "qtyMsf": 39.2, "qtyM2": 3643.3680000000004, "sheets": 800, "skids": 4, "unitMsf": 700, "unitM2": 7.53, "extPo": 27440.000000000004, "leadTime": 45}, {"lineNo": 2, "partNo": "694438", "custPartNo": "G1S 694438", "size": "2MM 49\" x 144\" ACP", "widthMm": 1245, "lengthMm": 3658, "color": "ASC 0069 GLOSSY WHITE", "qtyMsf": 49, "qtyM2": 4554.21, "sheets": 1000, "skids": 5, "unitMsf": 700, "unitM2": 7.53, "extPo": 34300, "leadTime": 45}]}], "master": {"stages": ["PO Received", "Proforma Invoice Sent", "Downpayment Received", "In Production", "Container Loaded", "Commercial Invoice Sent", "Balance Payment Received", "Telex / Seaway Released", "Arrived"], "stockingLocations": ["South Paris, ME", "Ashburn, GA", "Hillsboro, TX", "Nampa, ID", "Granger, IN", "Gordon, PA", "Minneota, MN", "Houston, TX", "Twin Falls, ID", "Savannah, GA"], "uaeSites": ["UAE - Jebel Ali", "UAE - Sharjah", "UAE - Abu Dhabi"], "portsOfEntry": {"South Paris, ME": "Baltimore", "Ashburn, GA": "Savannah", "Hillsboro, TX": "Houston", "Nampa, ID": "Oakland", "Granger, IN": "Baltimore", "Gordon, PA": "Baltimore", "Minneota, MN": "Houston", "Houston, TX": "Houston", "Savannah, GA": "Savannah", "Twin Falls, ID": "Oakland"}, "sailingDays": {"Baltimore": 58, "Oakland": 66, "Houston": 53, "Savannah": 46}, "freight": 4500, "inland": 1000, "sheetsPerSkid": 200, "containerMaxM2": 8600, "leadDays": {"standard": 45, "nonStandard": 90}, "standardColors": {"ASC 0096": "GLOSSY BLACK", "ASC 0069": "GLOSSY WHITE", "ASC 0103": "SILVER FROST", "AMC 0086": "CHARCOAL METALLIC", "ASC 0089": "VICTORY RED", "ASC 0105": "INDIGO BLUE"}}, "pricing": {"headers": ["Product Code 1", "Product Code 2", "Item Type", "Surface", "Construction", "Thickness", "Width", "", "Length", "", "Description", "Color", "Vendor Color Code", "PRICE PER SQFT/EXWORKS", "PRICE PER M2/EXWORKS", "PRICE PER MSQ/EXWORKS", "PRICE PER SHEET", "Lead Time (Days)", "", "Price per m2 will increase by $0.20 for all items after the 14 POs are received for Houston", "", "", "", ""], "rows": [[null, null, null, null, null, null, "Inches ", "MM", "Inches ", "MM", null, null, null, null, null, null, null, null, null, null, null, null, null, null], [704984, "G1S 704984", "PL", "LAM", "ACP", "2MM", 49, 1245, 84, 2135, "ACP", "GLOSSY BLACK", "ASC 0096", 0.72, 7.73, 720, 20.546919750000004, 45, null, null, null, null, null, null], [694431, "G1S 694431", "PL", "LAM", "ACP", "2MM", 49, 1245, 90, 2286, "ACP", "GLOSSY BLACK", "ASC 0096", 0.72, 7.73, 720, 22.0001211, 45, null, null, null, null, null, null], [709354, "G1S 709354", "PL", "LAM", "ACP", "2MM", 49, 1245, 90.5, 2300, "ACP", "GLOSSY BLACK", "ASC 0096", 0.72, 7.73, 720, 22.134855, 45, null, null, null, null, null, null], [694432, "G1S 694432", "PL", "LAM", "ACP", "2MM", 49, 1245, 96, 2440, "ACP", "GLOSSY BLACK", "ASC 0096", 0.72, 7.73, 720, 23.482194, 45, null, null, null, null, null, null], [694433, "G1S 694433", "PL", "LAM", "ACP", "2MM", 49, 1245, 108, 2745, "ACP", "GLOSSY BLACK", "ASC 0096", 0.72, 7.73, 720, 26.417468250000002, 45, null, null, null, null, null, null], [694434, "G1S 694434", "PL", "LAM", "ACP", "2MM", 49, 1245, 144, 3658, "ACP", "GLOSSY BLACK", "ASC 0096", 0.72, 7.73, 720, 35.2040433, 45, null, null, null, null, null, null], [704985, "G1S 704985", "PL", "LAM", "ACP", "2MM", 49, 1245, 84, 2135, "ACP", "GLOSSY WHITE", "ASC 0069", 0.72, 7.73, 720, 20.546919750000004, 45, null, null, null, null, null, null], [694435, "G1S 694435", "PL", "LAM", "ACP", "2MM", 49, 1245, 90, 2286, "ACP", "GLOSSY WHITE", "ASC 0069", 0.72, 7.73, 720, 22.0001211, 45, null, null, null, null, null, null], [709355, "G1S 709355", "PL", "LAM", "ACP", "2MM", 49, 1245, 90.5, 2300, "ACP", "GLOSSY WHITE", "ASC 0069", 0.72, 7.73, 720, 22.134855, 45, null, null, null, null, null, null], [694436, "G1S 694436", "PL", "LAM", "ACP", "2MM", 49, 1245, 96, 2440, "ACP", "GLOSSY WHITE", "ASC 0069", 0.72, 7.73, 720, 23.482194, 45, null, null, null, null, null, null], [694437, "G1S 694437", "PL", "LAM", "ACP", "2MM", 49, 1245, 108, 2745, "ACP", "GLOSSY WHITE", "ASC 0069", 0.72, 7.73, 720, 26.417468250000002, 45, null, null, null, null, null, null], [694438, "G1S 694438", "PL", "LAM", "ACP", "2MM", 49, 1245, 144, 3658, "ACP", "GLOSSY WHITE", "ASC 0069", 0.72, 7.73, 720, 35.2040433, 45, null, null, null, null, null, null], [714952, "G1S 714952", "PL", "LAM", "ACP", "2MM", 49, 1245, 84, 2135, "ACP", "SILVER FROST", "AMC 0103", 0.72, 7.73, 720, 20.546919750000004, 90, null, null, null, null, null, null], [694439, "G1S 694439", "PL", "LAM", "ACP", "2MM", 49, 1245, 90, 2286, "ACP", "SILVER FROST", "AMC 0103", 0.72, 7.73, 720, 22.0001211, 90, null, null, null, null, null, null]]}};
+
+/* ============================================================
+   STAGES + ROLE PERMISSIONS
+   ============================================================ */
+const STAGES = [
+  "PO Received",
+  "Proforma Invoice Sent",
+  "Downpayment Received",
+  "In Production",
+  "Container Loaded",
+  "Commercial Invoice Sent",
+  "Balance Payment Received",
+  "Telex / Seaway Released",
+  "Arrived"
+];
+const STAGE_COLORS = {
+  "PO Received":"bg-slate-100 text-slate-700",
+  "Proforma Invoice Sent":"bg-amber-100 text-amber-800",
+  "Downpayment Received":"bg-yellow-100 text-yellow-800",
+  "In Production":"bg-orange-100 text-orange-800",
+  "Container Loaded":"bg-blue-100 text-blue-800",
+  "Commercial Invoice Sent":"bg-cyan-100 text-cyan-800",
+  "Balance Payment Received":"bg-violet-100 text-violet-800",
+  "Telex / Seaway Released":"bg-indigo-100 text-indigo-800",
+  "Arrived":"bg-emerald-100 text-emerald-800",
+  "PO Revised":"bg-pink-100 text-pink-800",
+  "PO Cancelled":"bg-red-100 text-red-800"
+};
+// who can advance to a stage
+const STAGE_OWNERS = {
+  "PO Received":["HQ_SALES"],
+  "Proforma Invoice Sent":["HQ_SALES"],
+  "Downpayment Received":["HQ_SALES"],
+  "In Production":["UAE_JEBEL_ALI","UAE_SHARJAH","UAE_ABU_DHABI"],
+  "Container Loaded":["UAE_JEBEL_ALI","UAE_SHARJAH","UAE_ABU_DHABI"],
+  "Commercial Invoice Sent":["HQ_SALES"],
+  "Balance Payment Received":["HQ_SALES"],
+  "Telex / Seaway Released":["HQ_SALES"],
+  "Arrived":["LOGISTICS","HQ_SALES"]
+};
+
+/* ============================================================
+   STATE + PERSISTENCE
+   ============================================================ */
+const LS_KEY = "ufp_tracker_state_v1";
+let state = loadState();
+let currentTab = "dashboard";
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e){}
+  return seedState();
+}
+function seedState() {
+  const pos = SEED.pos.map((p, i) => normalizePO(p, i));
+  return { pos, master: SEED.master, pricing: SEED.pricing, currentRole: "HQ_SALES", nextId: pos.length + 1 };
+}
+function saveState() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+function resetData() {
+  if (!confirm("Reset all data to sample seed? This wipes local changes.")) return;
+  localStorage.removeItem(LS_KEY);
+  state = seedState();
+  render();
+  toast("Reset to sample data");
+}
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], {type:"application/json"});
+  download(blob, `ufp-tracker-${new Date().toISOString().slice(0,10)}.json`);
+}
+function importData(ev) {
+  const f = ev.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try { state = JSON.parse(r.result); saveState(); render(); toast("Data imported"); }
+    catch(e){ alert("Invalid JSON file"); }
+  };
+  r.readAsText(f);
+}
+function exportCsv() {
+  const cols = ["poNo","rev","status","poDate","stockingLocation","productionSite","portOfDest","poValue","totalM2","skids","piNo","piDate","piValue","dpDate","dpAmount","productionEtc","containerNo","bol","shippingLine","actualDeparture","shippingEta","ciNo","ciDate","freight","inland","ciValue","balanceDue","bpDate","bpAmount","telexDate","arrivalDate"];
+  const head = cols.join(",");
+  const rows = state.pos.map(p => cols.map(c => csvCell(p[c])).join(","));
+  const blob = new Blob([head+"\n"+rows.join("\n")], {type:"text/csv"});
+  download(blob, `ufp-orders-${new Date().toISOString().slice(0,10)}.csv`);
+}
+function csvCell(v) {
+  if (v == null) return "";
+  const s = String(v).replace(/"/g,'""');
+  return /[,"\n]/.test(s) ? `"${s}"` : s;
+}
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function normalizePO(p, idx) {
+  return {
+    id: p.id ?? idx + 1,
+    poNo: String(p.poNo ?? ""),
+    rev: p.rev ?? 0,
+    status: p.status ?? "PO Received",
+    poDate: p.poDate ?? "",
+    active: p.active ?? true,
+    skids: p.skids ?? sumLines(p.lines, "skids"),
+    stockingLocation: p.stockingLocation ?? "",
+    portOfDest: p.portOfDest ?? "",
+    poValue: p.poValue ?? sumLines(p.lines, "extPo"),
+    totalM2: p.totalM2 ?? sumLines(p.lines, "qtyM2"),
+    productionSite: p.productionSite ?? "",
+    productionStart: p.productionStart ?? "",
+    productionEtc: p.productionEtc ?? "",
+    piNo: p.piNo ?? "", piDate: p.piDate ?? "", piValue: p.piValue ?? "",
+    dpDate: p.dpDate ?? "", dpAmount: p.dpAmount ?? "",
+    ciNo: p.ciNo ?? "", ciDate: p.ciDate ?? "", ciValue: p.ciValue ?? "",
+    freight: p.freight ?? "", inland: p.inland ?? "", balanceDue: p.balanceDue ?? "",
+    bpDate: p.bpDate ?? "", bpAmount: p.bpAmount ?? "", telexDate: p.telexDate ?? "",
+    containerNo: p.containerNo ?? "", bol: p.bol ?? "", isf: p.isf ?? "",
+    shippingLine: p.shippingLine ?? "", shippingEta: p.shippingEta ?? "",
+    actualDeparture: p.actualDeparture ?? "", arrivalDate: p.arrivalDate ?? "",
+    lines: (p.lines || []).map(l => ({ ...l })),
+    history: p.history || [{stage:"PO Received", by:"seed", at: p.poDate || todayISO(), note:"Seeded record"}],
+    notes: p.notes || ""
+  };
+}
+function sumLines(lines, key) { return (lines||[]).reduce((s,l)=>s+(Number(l[key])||0),0); }
+function todayISO() { return new Date().toISOString().slice(0,10); }
+function fmtMoney(v) { if (v==null||v==="") return ""; const n=Number(v); if (isNaN(n)) return v; return "$"+n.toLocaleString(undefined,{maximumFractionDigits:2}); }
+function fmtNum(v, d=2) { if (v==null||v==="") return ""; const n=Number(v); if (isNaN(n)) return v; return n.toLocaleString(undefined,{maximumFractionDigits:d}); }
+function fmtDate(v) { return v || ""; }
+function daysBetween(a, b) { if (!a||!b) return ""; const d=(new Date(b)-new Date(a))/86400000; return isFinite(d)?Math.round(d):""; }
+function stagePillHtml(s) { return `<span class="stage-pill ${STAGE_COLORS[s]||"bg-slate-100 text-slate-700"}">${s||""}</span>`; }
+function roleLabel(r) { return ({HQ_SALES:"HQ / Sales",UAE_JEBEL_ALI:"UAE – Jebel Ali",UAE_SHARJAH:"UAE – Sharjah",UAE_ABU_DHABI:"UAE – Abu Dhabi",LOGISTICS:"Logistics",VIEWER:"Viewer"})[r]||r; }
+function canAdvance(stage, role) { return (STAGE_OWNERS[stage]||[]).includes(role); }
+function stageIndex(s) { const i=STAGES.indexOf(s); return i<0?0:i; }
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.remove("hidden");
+  clearTimeout(window._toastT);
+  window._toastT = setTimeout(()=>t.classList.add("hidden"), 2400);
+}
+
+/* ============================================================
+   ROUTING / RENDER
+   ============================================================ */
+function render() {
+  document.querySelectorAll(".tab-btn").forEach(b => {
+    b.classList.toggle("bg-slate-900", b.dataset.tab===currentTab);
+    b.classList.toggle("text-white", b.dataset.tab===currentTab);
+  });
+  const main = document.getElementById("main");
+  if (currentTab==="dashboard") main.innerHTML = renderDashboard();
+  else if (currentTab==="orders") main.innerHTML = renderOrders();
+  else if (currentTab==="upload") main.innerHTML = renderUpload();
+  else if (currentTab==="items") main.innerHTML = renderItemSummary();
+  else if (currentTab==="pricing") main.innerHTML = renderPricing();
+  else if (currentTab==="master") main.innerHTML = renderMaster();
+  if (currentTab==="dashboard") setTimeout(drawDashboardCharts, 30);
+  if (currentTab==="upload") wireUpload();
+  if (currentTab==="orders") wireOrders();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".tab-btn").forEach(b => b.addEventListener("click", () => { currentTab=b.dataset.tab; render(); }));
+  document.getElementById("roleSwitcher").addEventListener("change", e => {
+    state.currentRole = e.target.value;
+    document.getElementById("roleBadge").textContent = roleLabel(state.currentRole);
+    saveState(); render();
+  });
+  document.getElementById("roleSwitcher").value = state.currentRole;
+  document.getElementById("roleBadge").textContent = roleLabel(state.currentRole);
+  document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("menuDropdown").classList.toggle("hidden"));
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#menuBtn") && !e.target.closest("#menuDropdown")) document.getElementById("menuDropdown").classList.add("hidden");
+  });
+  render();
+});
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+function renderDashboard() {
+  const locs = state.master.stockingLocations;
+  const pivot = {};
+  STAGES.forEach(s => { pivot[s] = {}; locs.forEach(l => pivot[s][l]=0); pivot[s].TOTAL=0; });
+  state.pos.filter(p=>p.active!==false).forEach(p => {
+    if (!pivot[p.status]) return;
+    const l = p.stockingLocation;
+    if (l && pivot[p.status][l]!=null) pivot[p.status][l]++;
+    pivot[p.status].TOTAL++;
+  });
+  const totalsByLoc = {}; locs.forEach(l => totalsByLoc[l] = STAGES.reduce((s,st)=>s+pivot[st][l],0));
+  const grandTotal = STAGES.reduce((s,st)=>s+pivot[st].TOTAL,0);
+
+  // KPIs
+  const active = state.pos.filter(p=>p.active!==false);
+  const openCount = active.filter(p => stageIndex(p.status) < stageIndex("Arrived")).length;
+  const arrivedCount = active.filter(p => p.status==="Arrived").length;
+  const totalValue = active.reduce((s,p)=>s+(Number(p.poValue)||0),0);
+  const totalM2 = active.reduce((s,p)=>s+(Number(p.totalM2)||0),0);
+
+  // Cycle time averages
+  const avg = (arr) => { const x=arr.filter(n=>typeof n==="number"&&isFinite(n)); return x.length? (x.reduce((a,b)=>a+b,0)/x.length).toFixed(1):"—"; };
+  const poToPi = avg(active.map(p=>daysBetween(p.poDate,p.piDate)).filter(n=>typeof n==="number"));
+  const piToDp = avg(active.map(p=>daysBetween(p.piDate,p.dpDate)).filter(n=>typeof n==="number"));
+  const dpToShip = avg(active.map(p=>daysBetween(p.dpDate,p.actualDeparture)).filter(n=>typeof n==="number"));
+  const ciToBp = avg(active.map(p=>daysBetween(p.ciDate,p.bpDate)).filter(n=>typeof n==="number"));
+  const bpToTelex = avg(active.map(p=>daysBetween(p.bpDate,p.telexDate)).filter(n=>typeof n==="number"));
+
+  // Color volumes
+  const colorVol = {};
+  active.forEach(p => p.lines.forEach(l => {
+    const k = l.color || "—";
+    colorVol[k] = colorVol[k] || {sheets:0, msf:0, m2:0, value:0};
+    colorVol[k].sheets += Number(l.sheets)||0;
+    colorVol[k].msf += Number(l.qtyMsf)||0;
+    colorVol[k].m2 += Number(l.qtyM2)||0;
+    colorVol[k].value += Number(l.extPo)||0;
+  }));
+
+  return `
+  <div class="grid grid-cols-4 gap-4 mb-6">
+    ${kpi("Open Orders", openCount, "bg-blue-50 text-blue-700")}
+    ${kpi("Arrived", arrivedCount, "bg-emerald-50 text-emerald-700")}
+    ${kpi("Total PO Value", fmtMoney(totalValue), "bg-violet-50 text-violet-700")}
+    ${kpi("Total M²", fmtNum(totalM2,0), "bg-amber-50 text-amber-700")}
+  </div>
+
+  ${state.currentRole === "HQ_SALES" ? renderMonthlyPanel() : ""}
+  ${state.currentRole === "HQ_SALES" ? renderCapacityPanel() : ""}
+
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="col-span-2 bg-white rounded-lg border border-slate-200 p-4">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-semibold text-slate-900">Order status by stocking location</div>
+        <div class="text-xs text-slate-500">Active orders only</div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="tbl w-full">
+          <thead><tr>
+            <th>Stage</th>
+            ${locs.map(l=>`<th class="text-right">${l.split(",")[0]}</th>`).join("")}
+            <th class="text-right">Total</th>
+          </tr></thead>
+          <tbody>
+            ${STAGES.map(s=>`
+              <tr>
+                <td>${stagePillHtml(s)}</td>
+                ${locs.map(l=>`<td class="text-right ${pivot[s][l]?'font-semibold text-slate-900':''}">${pivot[s][l]||""}</td>`).join("")}
+                <td class="text-right font-semibold">${pivot[s].TOTAL||""}</td>
+              </tr>
+            `).join("")}
+            <tr class="bg-slate-50 font-semibold">
+              <td>TOTAL</td>
+              ${locs.map(l=>`<td class="text-right">${totalsByLoc[l]||""}</td>`).join("")}
+              <td class="text-right">${grandTotal}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <div class="font-semibold text-slate-900 mb-3">Cycle time (avg days)</div>
+      <div class="space-y-2 text-sm">
+        ${cycRow("PO → Proforma Invoice", poToPi)}
+        ${cycRow("PI → Downpayment", piToDp)}
+        ${cycRow("DP → Shipping Departure", dpToShip)}
+        ${cycRow("Commercial Invoice → Balance Payment", ciToBp)}
+        ${cycRow("Balance Payment → Telex Release", bpToTelex)}
+      </div>
+      <div class="mt-4 pt-4 border-t border-slate-200">
+        <div class="text-xs text-slate-500 mb-2">Status mix</div>
+        <canvas id="statusChart" height="160"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-lg border border-slate-200 p-4">
+    <div class="font-semibold text-slate-900 mb-3">Volume by color (active orders)</div>
+    <div class="overflow-x-auto">
+      <table class="tbl w-full">
+        <thead><tr>
+          <th>Color</th><th class="text-right">Sheets</th><th class="text-right">MSF</th><th class="text-right">M²</th><th class="text-right">Value</th>
+        </tr></thead>
+        <tbody>
+          ${Object.entries(colorVol).sort((a,b)=>b[1].value-a[1].value).map(([c,v])=>`
+            <tr><td>${c}</td><td class="text-right">${fmtNum(v.sheets,0)}</td><td class="text-right">${fmtNum(v.msf,2)}</td><td class="text-right">${fmtNum(v.m2,2)}</td><td class="text-right">${fmtMoney(v.value)}</td></tr>
+          `).join("") || `<tr><td colspan="5" class="text-center text-slate-400 py-6">No line items yet</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  `;
+}
+function kpi(label, val, cls) { return `<div class="rounded-lg border border-slate-200 bg-white p-4">
+  <div class="text-xs text-slate-500 mb-1">${label}</div>
+  <div class="text-2xl font-bold ${cls.split(" ").filter(c=>c.startsWith("text-")).join(" ")}">${val}</div>
+</div>`; }
+function cycRow(label, val) { return `<div class="flex justify-between"><span class="text-slate-600">${label}</span><span class="font-semibold">${val} d</span></div>`; }
+
+/* ============================================================
+   MONTHLY SALES PANEL (HQ/Sales only)
+   Revenue: invoiced value (CI value by CI date)
+              fallback to PO value by PO date when CI not yet sent
+   M² invoiced: totalM2 by CI date (fallback PO date)
+   Containers shipped: count of POs with actualDeparture in that month
+   ============================================================ */
+function computeMonthlyMetrics(year) {
+  const months = Array.from({length:12}, () => ({ revenue:0, m2:0, containers:0, m2Shipped:0, orders:0, paid:0 }));
+  state.pos.filter(p => p.active !== false).forEach(p => {
+    // Revenue + invoiced M²: prefer CI date/value, fallback to PO date/value
+    const invDate = p.ciDate || p.poDate;
+    const invValue = Number(p.ciValue) || Number(p.poValue) || 0;
+    const invM2 = Number(p.totalM2) || 0;
+    if (invDate) {
+      const d = new Date(invDate);
+      if (!isNaN(d) && d.getFullYear() === year) {
+        const mi = d.getMonth();
+        months[mi].revenue += invValue;
+        months[mi].m2 += invM2;
+        months[mi].orders += 1;
+      }
+    }
+    // Containers + m² shipped from Dubai: by actual departure
+    if (p.actualDeparture) {
+      const d = new Date(p.actualDeparture);
+      if (!isNaN(d) && d.getFullYear() === year) {
+        months[d.getMonth()].containers += 1;
+        months[d.getMonth()].m2Shipped += Number(p.totalM2) || 0;
+      }
+    }
+    // Cash collected (balance + downpayment) in this year
+    [["bpDate","bpAmount"],["dpDate","dpAmount"]].forEach(([dk,ak]) => {
+      if (p[dk]) {
+        const d = new Date(p[dk]);
+        if (!isNaN(d) && d.getFullYear() === year) months[d.getMonth()].paid += Number(p[ak])||0;
+      }
+    });
+  });
+  return months;
+}
+function availableYears() {
+  const ys = new Set([new Date().getFullYear()]);
+  state.pos.forEach(p => {
+    [p.poDate, p.ciDate, p.actualDeparture, p.bpDate].forEach(d => {
+      if (d) { const y = new Date(d).getFullYear(); if (!isNaN(y)) ys.add(y); }
+    });
+  });
+  return Array.from(ys).sort((a,b)=>b-a);
+}
+function renderMonthlyPanel() {
+  const years = availableYears();
+  if (!years.includes(selectedYear)) selectedYear = years[0];
+  const months = computeMonthlyMetrics(selectedYear);
+  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const totRevenue = months.reduce((s,m)=>s+m.revenue,0);
+  const totM2 = months.reduce((s,m)=>s+m.m2,0);
+  const totContainers = months.reduce((s,m)=>s+m.containers,0);
+  const totPaid = months.reduce((s,m)=>s+m.paid,0);
+  const bestMonthIdx = months.reduce((b,m,i,arr)=>m.revenue>arr[b].revenue?i:b, 0);
+  const yearOpts = years.map(y => `<option value="${y}" ${y===selectedYear?"selected":""}>${y}</option>`).join("");
+
+  return `
+  <div class="bg-white rounded-lg border border-slate-200 p-4 mb-6">
+    <div class="flex items-center gap-3 mb-3">
+      <div>
+        <div class="font-semibold text-slate-900">Annual sales — ${selectedYear}</div>
+        <div class="text-xs text-slate-500">Revenue based on Commercial Invoice (fallback to PO value). HQ / Sales view only.</div>
+      </div>
+      <select id="yearSel" class="ml-auto border border-slate-300 rounded-md px-2 py-1.5 text-sm" onchange="selectedYear=+this.value; render()">${yearOpts}</select>
+    </div>
+    <div class="grid grid-cols-4 gap-3 mb-4">
+      <div class="rounded-lg bg-violet-50 p-3">
+        <div class="text-[11px] uppercase text-violet-700">YTD Revenue invoiced</div>
+        <div class="text-xl font-bold text-violet-900">${fmtMoney(totRevenue)}</div>
+      </div>
+      <div class="rounded-lg bg-amber-50 p-3">
+        <div class="text-[11px] uppercase text-amber-700">YTD M² invoiced</div>
+        <div class="text-xl font-bold text-amber-900">${fmtNum(totM2,0)}</div>
+      </div>
+      <div class="rounded-lg bg-blue-50 p-3">
+        <div class="text-[11px] uppercase text-blue-700">YTD Containers shipped</div>
+        <div class="text-xl font-bold text-blue-900">${totContainers}</div>
+      </div>
+      <div class="rounded-lg bg-emerald-50 p-3">
+        <div class="text-[11px] uppercase text-emerald-700">YTD Cash collected</div>
+        <div class="text-xl font-bold text-emerald-900">${fmtMoney(totPaid)}</div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-3 gap-4">
+      <div class="col-span-2">
+        <canvas id="monthlyChart" height="170"></canvas>
+      </div>
+      <div class="text-xs text-slate-600 leading-relaxed border border-slate-200 rounded-md p-3 bg-slate-50">
+        <div class="font-semibold text-slate-800 mb-1">Reading this</div>
+        <div class="mb-1">• <b>Revenue</b> = Commercial Invoice value in the month the CI was issued.</div>
+        <div class="mb-1">• <b>M² invoiced</b> = total square meters on those invoices.</div>
+        <div class="mb-1">• <b>Containers</b> = count of POs whose container departed that month.</div>
+        <div class="mb-1">• <b>Cash collected</b> = downpayments + balance payments received.</div>
+        <div class="mt-2 pt-2 border-t border-slate-200"><b>Best month:</b> ${monthNames[bestMonthIdx]} (${fmtMoney(months[bestMonthIdx].revenue)})</div>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto mt-4">
+      <table class="tbl w-full text-xs">
+        <thead><tr>
+          <th>Metric</th>
+          ${monthNames.map((m,i)=>`<th class="text-right ${i===bestMonthIdx?'bg-violet-50':''}">${m}</th>`).join("")}
+          <th class="text-right">YTD</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td class="font-semibold">Revenue invoiced</td>
+            ${months.map((m,i)=>`<td class="text-right ${m.revenue?'font-semibold text-slate-900':'text-slate-300'} ${i===bestMonthIdx?'bg-violet-50':''}">${m.revenue?fmtMoney(m.revenue):"—"}</td>`).join("")}
+            <td class="text-right font-bold">${fmtMoney(totRevenue)}</td>
+          </tr>
+          <tr>
+            <td class="font-semibold">M² invoiced</td>
+            ${months.map((m,i)=>`<td class="text-right ${m.m2?'font-semibold text-slate-900':'text-slate-300'} ${i===bestMonthIdx?'bg-violet-50':''}">${m.m2?fmtNum(m.m2,0):"—"}</td>`).join("")}
+            <td class="text-right font-bold">${fmtNum(totM2,0)}</td>
+          </tr>
+          <tr>
+            <td class="font-semibold">Containers shipped</td>
+            ${months.map((m,i)=>`<td class="text-right ${m.containers?'font-semibold text-slate-900':'text-slate-300'} ${i===bestMonthIdx?'bg-violet-50':''}">${m.containers||"—"}</td>`).join("")}
+            <td class="text-right font-bold">${totContainers}</td>
+          </tr>
+          <tr>
+            <td>Orders invoiced (count)</td>
+            ${months.map((m,i)=>`<td class="text-right ${i===bestMonthIdx?'bg-violet-50':''}">${m.orders||"—"}</td>`).join("")}
+            <td class="text-right font-semibold">${months.reduce((s,m)=>s+m.orders,0)}</td>
+          </tr>
+          <tr>
+            <td>Cash collected</td>
+            ${months.map((m,i)=>`<td class="text-right ${i===bestMonthIdx?'bg-violet-50':''}">${m.paid?fmtMoney(m.paid):"—"}</td>`).join("")}
+            <td class="text-right font-semibold">${fmtMoney(totPaid)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  `;
+}
+function drawMonthlyChart() {
+  const ctx = document.getElementById("monthlyChart"); if (!ctx) return;
+  const months = computeMonthlyMetrics(selectedYear);
+  const labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  new Chart(ctx, {
+    data: {
+      labels,
+      datasets: [
+        { type:"bar", label:"Revenue ($)", data: months.map(m=>m.revenue), backgroundColor:"#8b5cf6", yAxisID:"y", borderRadius:4 },
+        { type:"bar", label:"M² invoiced", data: months.map(m=>m.m2), backgroundColor:"#f59e0b", yAxisID:"y1", borderRadius:4 },
+        { type:"line", label:"Containers shipped", data: months.map(m=>m.containers), borderColor:"#2563eb", backgroundColor:"#2563eb", yAxisID:"y2", tension:0.3, pointRadius:4, pointHoverRadius:6 }
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      interaction: { mode:"index", intersect:false },
+      plugins: {
+        legend: { position:"bottom", labels:{ boxWidth:12, font:{ size:11 } } },
+        tooltip: { callbacks: {
+          label: (c) => {
+            const v = c.parsed.y;
+            if (c.dataset.label.startsWith("Revenue")) return `Revenue: ${fmtMoney(v)}`;
+            if (c.dataset.label.startsWith("M²")) return `M² invoiced: ${fmtNum(v,0)}`;
+            return `Containers: ${v}`;
+          }
+        } }
+      },
+      scales: {
+        y:  { position:"left",  title:{ display:true, text:"Revenue ($)" }, ticks:{ callback:v=>"$"+(v/1000).toFixed(0)+"k" } },
+        y1: { position:"right", title:{ display:true, text:"M² invoiced" }, grid:{ drawOnChartArea:false } },
+        y2: { display:false }
+      }
+    }
+  });
+}
+
+/* ============================================================
+   CAPACITY vs ACTUAL (HQ/Sales only) — Dubai production
+   Defaults: 2 lines × 3,000 m²/line/day, 8,300 m² per container
+   Working days/month configurable (default 26 — UAE 6-day week)
+   ============================================================ */
+function getCapacityConfig() {
+  const m = state.master;
+  return {
+    lines:               Number(m.productionLines)     || 2,
+    m2PerLinePerDay:     Number(m.m2PerLinePerDay)     || 3000,
+    m2PerContainer:      Number(m.m2PerContainer)      || 8300,
+    workingDaysPerMonth: Number(m.workingDaysPerMonth) || 26
+  };
+}
+function saveCapacityConfig(patch) {
+  Object.assign(state.master, patch);
+  saveState();
+}
+function monthDaysFor(year, monthIdx, workingDays) {
+  // If selected year is in the past or before today, use full working-day allocation.
+  // For the current month (partial), pro-rate by today's day-of-month vs days in month.
+  const today = new Date();
+  if (year < today.getFullYear()) return workingDays;
+  if (year > today.getFullYear()) return workingDays;
+  if (monthIdx < today.getMonth()) return workingDays;
+  if (monthIdx > today.getMonth()) return workingDays;
+  const daysInMonth = new Date(year, monthIdx+1, 0).getDate();
+  return Math.max(1, Math.round(workingDays * (today.getDate() / daysInMonth)));
+}
+function computeMonthlyCapacity(year) {
+  const c = getCapacityConfig();
+  const months = computeMonthlyMetrics(year);
+  return months.map((m, i) => {
+    const wd = monthDaysFor(year, i, c.workingDaysPerMonth);
+    const capM2 = c.lines * c.m2PerLinePerDay * wd;
+    const capContainers = capM2 / c.m2PerContainer;
+    const utilM2  = capM2 ? (m.m2Shipped / capM2) * 100 : 0;
+    const utilCon = capContainers ? (m.containers / capContainers) * 100 : 0;
+    return {
+      ...m,
+      workingDays: wd,
+      capM2,
+      capContainers,
+      utilM2,
+      utilCon
+    };
+  });
+}
+function renderCapacityPanel() {
+  const c = getCapacityConfig();
+  const rows = computeMonthlyCapacity(selectedYear);
+  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const totalActual = rows.reduce((s,r)=>s+r.containers,0);
+  const totalCapacity = rows.reduce((s,r)=>s+r.capContainers,0);
+  const totalActualM2 = rows.reduce((s,r)=>s+r.m2Shipped,0);
+  const totalCapM2 = rows.reduce((s,r)=>s+r.capM2,0);
+  const ytdUtil = totalCapacity ? (totalActual/totalCapacity)*100 : 0;
+  const m2PerMonth = c.lines * c.m2PerLinePerDay * c.workingDaysPerMonth;
+  const containersPerMonth = m2PerMonth / c.m2PerContainer;
+
+  return `
+  <div class="bg-white rounded-lg border border-slate-200 p-4 mb-6">
+    <div class="flex items-center gap-3 mb-3">
+      <div>
+        <div class="font-semibold text-slate-900">Dubai production — actual vs capacity (${selectedYear})</div>
+        <div class="text-xs text-slate-500">Containers shipped from Dubai per month vs. theoretical capacity. Current month is pro-rated to today.</div>
+      </div>
+      <span class="ml-auto text-[11px] bg-slate-100 text-slate-700 px-2 py-1 rounded-md">HQ / Sales view</span>
+    </div>
+
+    <div class="grid grid-cols-4 gap-2 mb-4 text-sm">
+      <div>
+        <label class="text-[11px] text-slate-500">Production lines</label>
+        <input type="number" min="1" value="${c.lines}" class="w-full border border-slate-300 rounded-md px-2 py-1 text-sm"
+          onchange="saveCapacityConfig({productionLines:+this.value}); render()">
+      </div>
+      <div>
+        <label class="text-[11px] text-slate-500">m² / line / day</label>
+        <input type="number" min="0" value="${c.m2PerLinePerDay}" class="w-full border border-slate-300 rounded-md px-2 py-1 text-sm"
+          onchange="saveCapacityConfig({m2PerLinePerDay:+this.value}); render()">
+      </div>
+      <div>
+        <label class="text-[11px] text-slate-500">m² / container</label>
+        <input type="number" min="1" value="${c.m2PerContainer}" class="w-full border border-slate-300 rounded-md px-2 py-1 text-sm"
+          onchange="saveCapacityConfig({m2PerContainer:+this.value}); render()">
+      </div>
+      <div>
+        <label class="text-[11px] text-slate-500">Working days / month</label>
+        <input type="number" min="1" max="31" value="${c.workingDaysPerMonth}" class="w-full border border-slate-300 rounded-md px-2 py-1 text-sm"
+          onchange="saveCapacityConfig({workingDaysPerMonth:+this.value}); render()">
+      </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-3 mb-4">
+      <div class="rounded-lg bg-blue-50 p-3">
+        <div class="text-[11px] uppercase text-blue-700">Monthly capacity</div>
+        <div class="text-xl font-bold text-blue-900">${containersPerMonth.toFixed(1)} ctr</div>
+        <div class="text-[11px] text-blue-700">${fmtNum(m2PerMonth,0)} m² · ${c.lines}×${fmtNum(c.m2PerLinePerDay,0)}×${c.workingDaysPerMonth}d</div>
+      </div>
+      <div class="rounded-lg bg-emerald-50 p-3">
+        <div class="text-[11px] uppercase text-emerald-700">YTD actual containers</div>
+        <div class="text-xl font-bold text-emerald-900">${totalActual}</div>
+        <div class="text-[11px] text-emerald-700">${fmtNum(totalActualM2,0)} m² shipped</div>
+      </div>
+      <div class="rounded-lg bg-amber-50 p-3">
+        <div class="text-[11px] uppercase text-amber-700">YTD theoretical capacity</div>
+        <div class="text-xl font-bold text-amber-900">${totalCapacity.toFixed(1)} ctr</div>
+        <div class="text-[11px] text-amber-700">${fmtNum(totalCapM2,0)} m²</div>
+      </div>
+      <div class="rounded-lg ${ytdUtil>=85?'bg-emerald-50':ytdUtil>=60?'bg-amber-50':'bg-red-50'} p-3">
+        <div class="text-[11px] uppercase ${ytdUtil>=85?'text-emerald-700':ytdUtil>=60?'text-amber-700':'text-red-700'}">YTD utilization</div>
+        <div class="text-xl font-bold ${ytdUtil>=85?'text-emerald-900':ytdUtil>=60?'text-amber-900':'text-red-900'}">${ytdUtil.toFixed(1)}%</div>
+        <div class="text-[11px] ${ytdUtil>=85?'text-emerald-700':ytdUtil>=60?'text-amber-700':'text-red-700'}">${(totalCapacity-totalActual).toFixed(1)} ctr headroom</div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-3 gap-4">
+      <div class="col-span-2">
+        <canvas id="capacityChart" height="170"></canvas>
+      </div>
+      <div class="text-xs text-slate-600 leading-relaxed border border-slate-200 rounded-md p-3 bg-slate-50">
+        <div class="font-semibold text-slate-800 mb-1">Capacity formula</div>
+        <div class="font-mono text-[11px] bg-white border border-slate-200 rounded p-2 mb-2">
+          ${c.lines} lines × ${fmtNum(c.m2PerLinePerDay,0)} m²/day × ${c.workingDaysPerMonth} days<br>
+          = ${fmtNum(m2PerMonth,0)} m²/month<br>
+          ÷ ${fmtNum(c.m2PerContainer,0)} m²/container<br>
+          = <b>${containersPerMonth.toFixed(1)} containers/month</b>
+        </div>
+        <div class="mb-1">Bars compare <b>actual containers shipped from Dubai</b> (by actual departure date) against this ceiling.</div>
+        <div class="mb-1">The current month is <b>pro-rated</b> to today's date so it isn't misread as under-capacity.</div>
+        <div class="mt-2 pt-2 border-t border-slate-200">Edit the four assumptions above and the table + chart recompute instantly.</div>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto mt-4">
+      <table class="tbl w-full text-xs">
+        <thead><tr>
+          <th>Metric</th>
+          ${monthNames.map(m=>`<th class="text-right">${m}</th>`).join("")}
+          <th class="text-right">YTD</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td class="font-semibold">Capacity (containers)</td>
+            ${rows.map(r=>`<td class="text-right text-slate-500">${r.capContainers.toFixed(1)}</td>`).join("")}
+            <td class="text-right font-bold text-slate-700">${totalCapacity.toFixed(1)}</td>
+          </tr>
+          <tr>
+            <td class="font-semibold">Actual containers shipped</td>
+            ${rows.map(r=>`<td class="text-right ${r.containers?'font-semibold text-slate-900':'text-slate-300'}">${r.containers||"—"}</td>`).join("")}
+            <td class="text-right font-bold">${totalActual}</td>
+          </tr>
+          <tr>
+            <td>Utilization %</td>
+            ${rows.map(r=>{
+              const v = r.utilCon;
+              const cls = v>=85?"text-emerald-700":v>=60?"text-amber-700":v>0?"text-red-700":"text-slate-300";
+              return `<td class="text-right font-semibold ${cls}">${v?v.toFixed(0)+"%":"—"}</td>`;
+            }).join("")}
+            <td class="text-right font-bold ${ytdUtil>=85?'text-emerald-700':ytdUtil>=60?'text-amber-700':'text-red-700'}">${ytdUtil.toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td>m² shipped</td>
+            ${rows.map(r=>`<td class="text-right ${r.m2Shipped?'':'text-slate-300'}">${r.m2Shipped?fmtNum(r.m2Shipped,0):"—"}</td>`).join("")}
+            <td class="text-right font-semibold">${fmtNum(totalActualM2,0)}</td>
+          </tr>
+          <tr>
+            <td>m² capacity</td>
+            ${rows.map(r=>`<td class="text-right text-slate-500">${fmtNum(r.capM2,0)}</td>`).join("")}
+            <td class="text-right font-semibold text-slate-700">${fmtNum(totalCapM2,0)}</td>
+          </tr>
+          <tr>
+            <td>Headroom (containers)</td>
+            ${rows.map(r=>{
+              const h = r.capContainers - r.containers;
+              return `<td class="text-right ${h<0?'text-red-700 font-semibold':'text-slate-500'}">${h.toFixed(1)}</td>`;
+            }).join("")}
+            <td class="text-right font-semibold ${totalCapacity-totalActual<0?'text-red-700':''}">${(totalCapacity-totalActual).toFixed(1)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  `;
+}
+function drawCapacityChart() {
+  const ctx = document.getElementById("capacityChart"); if (!ctx) return;
+  const rows = computeMonthlyCapacity(selectedYear);
+  const labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  new Chart(ctx, {
+    data: {
+      labels,
+      datasets: [
+        { type:"bar", label:"Capacity (containers)", data: rows.map(r=>+r.capContainers.toFixed(2)), backgroundColor:"rgba(148,163,184,0.45)", borderColor:"#94a3b8", borderWidth:1, borderRadius:4, yAxisID:"y" },
+        { type:"bar", label:"Actual containers shipped", data: rows.map(r=>r.containers), backgroundColor:"#2563eb", borderRadius:4, yAxisID:"y" },
+        { type:"line", label:"Utilization %", data: rows.map(r=>+r.utilCon.toFixed(1)), borderColor:"#16a34a", backgroundColor:"#16a34a", tension:0.3, pointRadius:4, pointHoverRadius:6, yAxisID:"y1" }
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      interaction: { mode:"index", intersect:false },
+      plugins: {
+        legend: { position:"bottom", labels:{ boxWidth:12, font:{ size:11 } } },
+        tooltip: { callbacks: {
+          label: (c) => {
+            if (c.dataset.label.startsWith("Utilization")) return `Utilization: ${c.parsed.y}%`;
+            if (c.dataset.label.startsWith("Capacity")) return `Capacity: ${c.parsed.y} ctr`;
+            return `Actual: ${c.parsed.y} ctr`;
+          }
+        } }
+      },
+      scales: {
+        y:  { position:"left", title:{ display:true, text:"Containers" }, beginAtZero:true },
+        y1: { position:"right", title:{ display:true, text:"Utilization %" }, beginAtZero:true, suggestedMax:120, grid:{ drawOnChartArea:false }, ticks:{ callback:v=>v+"%" } }
+      }
+    }
+  });
+}
+
+function drawDashboardCharts() {
+  if (state.currentRole === "HQ_SALES") { drawMonthlyChart(); drawCapacityChart(); }
+  const ctx = document.getElementById("statusChart"); if (!ctx) return;
+  const counts = {};
+  state.pos.filter(p=>p.active!==false).forEach(p => counts[p.status]=(counts[p.status]||0)+1);
+  const labels = Object.keys(counts); const data = Object.values(counts);
+  const palette = ["#64748b","#f59e0b","#eab308","#fb923c","#3b82f6","#06b6d4","#8b5cf6","#6366f1","#10b981","#ec4899","#ef4444"];
+  const chart = new Chart(ctx, {
+    type: "doughnut",
+    data: { labels, datasets: [{ data, backgroundColor: labels.map((_,i)=>palette[i%palette.length]) }] },
+    options: {
+      plugins: {
+        legend: {
+          position: "bottom",
+          labels: { boxWidth: 10, font: { size: 10 } },
+          onClick: (e, item) => openStatusDetail(item.text)
+        },
+        tooltip: { callbacks: { afterLabel: () => "Click for details" } }
+      },
+      onClick: (evt, els) => {
+        if (!els.length) return;
+        const label = chart.data.labels[els[0].index];
+        openStatusDetail(label);
+      },
+      onHover: (evt, els) => { if (evt.native) evt.native.target.style.cursor = els.length ? "pointer" : "default"; }
+    }
+  });
+  const hint = document.createElement("div");
+  hint.className = "text-[10px] text-slate-400 text-center mt-2";
+  hint.textContent = "Click any slice or legend item for the PO list";
+  ctx.parentElement.appendChild(hint);
+}
+
+/* ============================================================
+   STATUS DETAIL MODAL (clicked from dashboard chart)
+   ============================================================ */
+function openStatusDetail(status) {
+  const matches = state.pos.filter(p => p.active !== false && p.status === status);
+  const totalValue = matches.reduce((s,p)=>s+(Number(p.poValue)||0),0);
+  const totalM2 = matches.reduce((s,p)=>s+(Number(p.totalM2)||0),0);
+  const totalSkids = matches.reduce((s,p)=>s+(Number(p.skids)||0),0);
+  const byLoc = {};
+  matches.forEach(p => { byLoc[p.stockingLocation||"—"] = (byLoc[p.stockingLocation||"—"]||0) + 1; });
+  const locChips = Object.entries(byLoc).map(([l,n])=>`<span class="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md">${l}: <b>${n}</b></span>`).join(" ");
+
+  const rowsHtml = matches.map(p => {
+    const lineSummary = p.lines.slice(0,3).map(l => `${l.color||""} · ${l.size||""} · ${fmtNum(l.sheets,0)} sh`).join("<br>");
+    return `
+    <tr class="cursor-pointer hover:bg-slate-50" onclick="document.getElementById('statusModal').remove(); openDrawer(${p.id})">
+      <td class="font-mono font-semibold text-slate-900">${p.poNo}${p.rev?`<span class="text-[10px] text-slate-400 ml-1">r${p.rev}</span>`:""}</td>
+      <td>${fmtDate(p.poDate)}</td>
+      <td>${p.stockingLocation||"—"}</td>
+      <td>${p.productionSite||"<span class='text-slate-400'>unassigned</span>"}</td>
+      <td class="font-mono text-xs">${p.containerNo||"<span class='text-slate-300'>—</span>"}</td>
+      <td class="font-mono text-xs">${p.bol||"<span class='text-slate-300'>—</span>"}</td>
+      <td>${p.shippingLine||"<span class='text-slate-300'>—</span>"}</td>
+      <td>${fmtDate(p.actualDeparture)||"<span class='text-slate-300'>—</span>"}</td>
+      <td>${fmtDate(p.shippingEta)||"<span class='text-slate-300'>—</span>"}</td>
+      <td class="text-right">${fmtNum(p.totalM2,0)}</td>
+      <td class="text-right">${p.skids||""}</td>
+      <td class="text-right font-semibold">${fmtMoney(p.poValue)}</td>
+      <td class="text-xs">${lineSummary||"<span class='text-slate-300'>no lines</span>"}</td>
+      <td class="text-right"><span class="text-indigo-600 text-xs">Open ›</span></td>
+    </tr>`;
+  }).join("");
+
+  const html = `
+    <div class="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-6" id="statusModal" onclick="if(event.target.id==='statusModal')document.getElementById('statusModal').remove()">
+      <div class="bg-white rounded-lg shadow-2xl w-[1280px] max-w-full max-h-[90vh] flex flex-col">
+        <div class="px-5 py-3 border-b border-slate-200 flex items-center gap-3">
+          ${stagePillHtml(status)}
+          <div>
+            <div class="font-semibold text-slate-900">${matches.length} purchase order${matches.length===1?"":"s"} at this stage</div>
+            <div class="text-xs text-slate-500">${fmtMoney(totalValue)} · ${fmtNum(totalM2,0)} m² · ${totalSkids} skids</div>
+          </div>
+          <div class="ml-4 flex flex-wrap gap-1">${locChips}</div>
+          <button class="ml-auto text-slate-400 hover:text-slate-700 text-2xl leading-none" onclick="document.getElementById('statusModal').remove()">×</button>
+        </div>
+        <div class="overflow-auto flex-1">
+          <table class="tbl w-full">
+            <thead><tr>
+              <th>PO #</th><th>PO Date</th><th>Stocking Loc</th><th>Production Site</th>
+              <th>Container #</th><th>BOL / SWBOL</th><th>Shipping Line</th>
+              <th>Departure</th><th>ETA</th>
+              <th class="text-right">M²</th><th class="text-right">Skids</th><th class="text-right">Value</th>
+              <th>Line items</th><th></th>
+            </tr></thead>
+            <tbody>${rowsHtml || `<tr><td colspan="14" class="text-center text-slate-400 py-10">No POs at this stage</td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="px-5 py-3 border-t border-slate-200 flex items-center text-xs text-slate-500">
+          <span>Click any row to open the full PO detail drawer.</span>
+          <button onclick="document.getElementById('statusModal').remove(); orderFilters={q:'',status:'${status.replace(/'/g,"\\'")}',site:''}; currentTab='orders'; render()" class="ml-auto px-3 py-1.5 text-sm rounded-md border border-slate-300 hover:bg-slate-50">View in Orders tab</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML("beforeend", html);
+}
+
+/* ============================================================
+   ORDERS LIST + DRAWER
+   ============================================================ */
+let orderFilters = { q:"", status:"", site:"" };
+let selectedYear = new Date().getFullYear();
+function renderOrders() {
+  const role = state.currentRole;
+  const sitesUAE = ["UAE_JEBEL_ALI","UAE_SHARJAH","UAE_ABU_DHABI"];
+  let rows = state.pos.slice();
+  if (orderFilters.q) {
+    const q = orderFilters.q.toLowerCase();
+    rows = rows.filter(p => (p.poNo+" "+p.stockingLocation+" "+p.productionSite+" "+(p.containerNo||"")).toLowerCase().includes(q));
+  }
+  if (orderFilters.status) rows = rows.filter(p=>p.status===orderFilters.status);
+  if (orderFilters.site) rows = rows.filter(p=>p.productionSite===orderFilters.site);
+  // UAE site role: default-filter to their own POs (with a toggle)
+  return `
+  <div class="bg-white rounded-lg border border-slate-200">
+    <div class="p-4 flex items-center gap-3 border-b border-slate-200">
+      <input id="orderSearch" placeholder="Search PO#, location, container…" value="${orderFilters.q}" class="border border-slate-300 rounded-md px-3 py-1.5 text-sm w-72">
+      <select id="statusFilter" class="border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+        <option value="">All stages</option>
+        ${STAGES.map(s=>`<option value="${s}" ${orderFilters.status===s?"selected":""}>${s}</option>`).join("")}
+      </select>
+      <select id="siteFilter" class="border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+        <option value="">All production sites</option>
+        ${state.master.uaeSites.map(s=>`<option value="${s}" ${orderFilters.site===s?"selected":""}>${s}</option>`).join("")}
+      </select>
+      <span class="text-sm text-slate-500 ml-auto">${rows.length} of ${state.pos.length} orders</span>
+      ${role==="HQ_SALES" ? `<button onclick="currentTab='upload';render()" class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700">+ New PO</button>`:""}
+    </div>
+    <div class="overflow-x-auto">
+      <table class="tbl w-full">
+        <thead><tr>
+          <th>PO #</th><th>Status</th><th>PO Date</th><th>Stocking Loc</th><th>Production Site</th><th class="text-right">M²</th><th class="text-right">Value</th><th>ETA</th><th>Container</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(p=>`
+            <tr class="cursor-pointer" onclick="openDrawer(${p.id})">
+              <td class="font-mono font-semibold text-slate-900">${p.poNo}${p.rev?`<span class="text-xs text-slate-400 ml-1">r${p.rev}</span>`:""}</td>
+              <td>${stagePillHtml(p.status)}</td>
+              <td>${fmtDate(p.poDate)}</td>
+              <td>${p.stockingLocation||"—"}</td>
+              <td>${p.productionSite||"<span class='text-slate-400'>unassigned</span>"}</td>
+              <td class="text-right">${fmtNum(p.totalM2,0)}</td>
+              <td class="text-right">${fmtMoney(p.poValue)}</td>
+              <td>${fmtDate(p.shippingEta)}</td>
+              <td class="font-mono text-xs">${p.containerNo||""}</td>
+              <td class="text-right"><span class="text-indigo-600 text-sm">Open ›</span></td>
+            </tr>
+          `).join("") || `<tr><td colspan="10" class="text-center text-slate-400 py-10">No orders match filters</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  `;
+}
+function wireOrders() {
+  document.getElementById("orderSearch").addEventListener("input", e => { orderFilters.q=e.target.value; render(); });
+  document.getElementById("statusFilter").addEventListener("change", e => { orderFilters.status=e.target.value; render(); });
+  document.getElementById("siteFilter").addEventListener("change", e => { orderFilters.site=e.target.value; render(); });
+}
+
+function openDrawer(id) {
+  const p = state.pos.find(x=>x.id===id); if (!p) return;
+  const role = state.currentRole;
+  const nextStage = STAGES[stageIndex(p.status)+1];
+  const canStep = nextStage && canAdvance(nextStage, role);
+  const drawer = document.getElementById("drawer");
+  drawer.innerHTML = `
+    <div class="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center gap-3 z-10">
+      <div>
+        <div class="text-xs text-slate-500">PO Number</div>
+        <div class="font-mono font-bold text-lg">${p.poNo}<span class="text-sm text-slate-400 ml-2">rev ${p.rev||0}</span></div>
+      </div>
+      <div class="ml-auto flex items-center gap-2">
+        ${stagePillHtml(p.status)}
+        <button onclick="closeDrawer()" class="text-slate-400 hover:text-slate-700 text-xl">×</button>
+      </div>
+    </div>
+
+    <div class="px-6 pt-4">
+      <div class="flex">${STAGES.map(s=>{
+        const i=STAGES.indexOf(s), cur=stageIndex(p.status);
+        const cls = i<cur?"done":(i===cur?"current":"");
+        return `<div class="pipeline-step ${cls}">${s}</div>`;
+      }).join("")}</div>
+    </div>
+
+    <div class="px-6 py-5 grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+      ${field("Stocking location", p.stockingLocation)}
+      ${field("Port of destination", p.portOfDest)}
+      ${field("PO Date", fmtDate(p.poDate))}
+      ${field("Active", p.active?"Yes":"No")}
+      ${field("Total M²", fmtNum(p.totalM2,2))}
+      ${field("Skids", p.skids)}
+      ${field("PO Value", fmtMoney(p.poValue))}
+      ${field("Production site", p.productionSite || "—")}
+    </div>
+
+    <div class="px-6 pb-4">
+      <div class="text-xs font-semibold text-slate-500 uppercase mb-2">Line items (${p.lines.length})</div>
+      <div class="border border-slate-200 rounded-md overflow-hidden">
+        <table class="tbl w-full text-xs">
+          <thead><tr><th>#</th><th>Part #</th><th>Size</th><th>Color</th><th class="text-right">Sheets</th><th class="text-right">M²</th><th class="text-right">Value</th></tr></thead>
+          <tbody>
+            ${p.lines.map(l=>`<tr>
+              <td>${l.lineNo||""}</td>
+              <td class="font-mono">${l.partNo||""}</td>
+              <td>${l.size||""}</td>
+              <td>${l.color||""}</td>
+              <td class="text-right">${fmtNum(l.sheets,0)}</td>
+              <td class="text-right">${fmtNum(l.qtyM2,2)}</td>
+              <td class="text-right">${fmtMoney(l.extPo)}</td>
+            </tr>`).join("") || `<tr><td colspan="7" class="text-center text-slate-400 py-3">No lines</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="px-6 pb-4 grid grid-cols-2 gap-4">
+      ${section("Proforma Invoice", `${field("PI #", p.piNo)}${field("PI Date", p.piDate)}${field("PI Value", fmtMoney(p.piValue))}`)}
+      ${section("Downpayment", `${field("DP Date", p.dpDate)}${field("DP Amount", fmtMoney(p.dpAmount))}`)}
+      ${section("Production", `${field("Site", p.productionSite)}${field("Start", p.productionStart)}${field("ETC", p.productionEtc)}`)}
+      ${section("Container & Shipping", `${field("Container #", p.containerNo)}${field("BOL / SWBOL", p.bol)}${field("Shipping line", p.shippingLine)}${field("Actual Departure", p.actualDeparture)}${field("Shipping ETA", p.shippingEta)}${field("ISF", p.isf)}`)}
+      ${section("Commercial Invoice", `${field("CI #", p.ciNo)}${field("CI Date", p.ciDate)}${field("Freight", fmtMoney(p.freight))}${field("Inland", fmtMoney(p.inland))}${field("CI Value", fmtMoney(p.ciValue))}${field("Balance Due", fmtMoney(p.balanceDue))}`)}
+      ${section("Balance Payment & Telex", `${field("BP Date", p.bpDate)}${field("BP Amount", fmtMoney(p.bpAmount))}${field("Telex Date", p.telexDate)}`)}
+      ${section("Arrival", `${field("Arrival Date", p.arrivalDate)}`)}
+    </div>
+
+    <div class="px-6 pb-4">
+      <div class="text-xs font-semibold text-slate-500 uppercase mb-2">History</div>
+      <div class="border border-slate-200 rounded-md p-3 text-xs max-h-40 overflow-y-auto bg-slate-50">
+        ${p.history.map(h=>`<div class="flex justify-between gap-3 py-0.5"><span><b>${h.stage}</b> — ${h.note||""}</span><span class="text-slate-500">${h.at} · ${roleLabel(h.by)}</span></div>`).join("")}
+      </div>
+    </div>
+
+    <div class="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-3 flex items-center gap-2">
+      ${canStep ? `<button onclick="openAdvanceForm(${p.id})" class="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700">Advance → ${nextStage}</button>` : nextStage ? `<span class="text-xs text-slate-500">Next stage <b>${nextStage}</b> is owned by ${(STAGE_OWNERS[nextStage]||[]).map(roleLabel).join(", ")}.</span>` : `<span class="text-sm text-emerald-700">Order complete · Arrived ${p.arrivalDate||""}</span>`}
+      <button onclick="editPO(${p.id})" class="ml-auto px-3 py-2 border border-slate-300 text-sm rounded-md hover:bg-slate-50">Edit fields</button>
+    </div>
+  `;
+  drawer.classList.remove("translate-x-full");
+  document.getElementById("drawerOverlay").classList.remove("hidden");
+}
+function closeDrawer() {
+  document.getElementById("drawer").classList.add("translate-x-full");
+  document.getElementById("drawerOverlay").classList.add("hidden");
+}
+function field(label, val) { return `<div><div class="text-[11px] uppercase text-slate-500">${label}</div><div class="font-medium text-slate-900">${val||"<span class='text-slate-300'>—</span>"}</div></div>`; }
+function section(title, inner) { return `<div class="border border-slate-200 rounded-md p-3">
+  <div class="text-xs font-semibold text-slate-500 uppercase mb-2">${title}</div>
+  <div class="grid grid-cols-2 gap-2 text-sm">${inner}</div>
+</div>`; }
+
+/* ============================================================
+   STAGE ADVANCE FORM
+   ============================================================ */
+function openAdvanceForm(id) {
+  const p = state.pos.find(x=>x.id===id);
+  const next = STAGES[stageIndex(p.status)+1]; if (!next) return;
+  const role = state.currentRole;
+  const fields = stageFields(next, p);
+  const html = `
+    <div class="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center" id="advWrap" onclick="if(event.target.id==='advWrap')document.getElementById('advWrap').remove()">
+      <div class="bg-white rounded-lg shadow-xl w-[520px] max-w-full">
+        <div class="px-5 py-3 border-b border-slate-200 flex items-center">
+          <div class="font-semibold">Advance to: ${next}</div>
+          <button class="ml-auto text-slate-400 hover:text-slate-700 text-xl" onclick="document.getElementById('advWrap').remove()">×</button>
+        </div>
+        <div class="p-5 space-y-3" id="advFields">${fields.map(f=>renderInput(f, p)).join("")}</div>
+        <div class="px-5 py-3 border-t border-slate-200 flex items-center gap-2">
+          <input id="advNote" placeholder="Optional note for history…" class="flex-1 border border-slate-300 rounded-md px-3 py-1.5 text-sm">
+          <button onclick="document.getElementById('advWrap').remove()" class="px-3 py-1.5 text-sm rounded-md border border-slate-300">Cancel</button>
+          <button onclick="commitAdvance(${p.id}, '${next.replace(/'/g,"\\'")}')" class="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white">Save & advance</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML("beforeend", html);
+}
+function stageFields(stage, p) {
+  const map = {
+    "Proforma Invoice Sent":[
+      {k:"piNo",label:"PI Number",type:"text"},
+      {k:"piDate",label:"PI Date",type:"date",def:todayISO()},
+      {k:"piValue",label:"PI Value (USD)",type:"number"}
+    ],
+    "Downpayment Received":[
+      {k:"dpDate",label:"DP Date",type:"date",def:todayISO()},
+      {k:"dpAmount",label:"DP Amount (USD)",type:"number"}
+    ],
+    "In Production":[
+      {k:"productionSite",label:"Production site",type:"select",options:state.master.uaeSites,def:roleToSite(state.currentRole)},
+      {k:"productionStart",label:"Production start",type:"date",def:todayISO()},
+      {k:"productionEtc",label:"Production ETC (ready to load)",type:"date"}
+    ],
+    "Container Loaded":[
+      {k:"containerNo",label:"Container #",type:"text"},
+      {k:"bol",label:"BOL / SWBOL #",type:"text"},
+      {k:"shippingLine",label:"Shipping line",type:"text"},
+      {k:"actualDeparture",label:"Actual departure",type:"date",def:todayISO()}
+    ],
+    "Commercial Invoice Sent":[
+      {k:"ciNo",label:"CI Number",type:"text"},
+      {k:"ciDate",label:"CI Date",type:"date",def:todayISO()},
+      {k:"freight",label:"Freight",type:"number",def:state.master.freight},
+      {k:"inland",label:"Inland",type:"number",def:state.master.inland},
+      {k:"ciValue",label:"CI Value (USD)",type:"number"},
+      {k:"balanceDue",label:"Balance due (USD)",type:"number"}
+    ],
+    "Balance Payment Received":[
+      {k:"bpDate",label:"BP Date",type:"date",def:todayISO()},
+      {k:"bpAmount",label:"BP Amount (USD)",type:"number"}
+    ],
+    "Telex / Seaway Released":[
+      {k:"telexDate",label:"Telex / SW release date",type:"date",def:todayISO()}
+    ],
+    "Arrived":[
+      {k:"arrivalDate",label:"Actual arrival at port",type:"date",def:todayISO()},
+      {k:"shippingEta",label:"Confirmed ETA (if revised)",type:"date"}
+    ]
+  };
+  return map[stage] || [];
+}
+function roleToSite(role) {
+  return ({UAE_JEBEL_ALI:"UAE - Jebel Ali", UAE_SHARJAH:"UAE - Sharjah", UAE_ABU_DHABI:"UAE - Abu Dhabi"})[role] || "";
+}
+function renderInput(f, p) {
+  const cur = p[f.k] || f.def || "";
+  if (f.type==="select") {
+    return `<div><label class="text-xs text-slate-500">${f.label}</label>
+      <select id="adv_${f.k}" class="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+        <option value="">—</option>
+        ${(f.options||[]).map(o=>`<option ${cur===o?"selected":""} value="${o}">${o}</option>`).join("")}
+      </select></div>`;
+  }
+  return `<div><label class="text-xs text-slate-500">${f.label}</label>
+    <input id="adv_${f.k}" type="${f.type}" value="${cur}" class="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"></div>`;
+}
+function commitAdvance(id, next) {
+  const p = state.pos.find(x=>x.id===id); if (!p) return;
+  const flds = stageFields(next, p);
+  flds.forEach(f => {
+    const el = document.getElementById("adv_"+f.k);
+    if (el) p[f.k] = el.value;
+  });
+  const note = document.getElementById("advNote").value;
+  p.status = next;
+  p.history.push({stage: next, by: state.currentRole, at: todayISO(), note});
+  saveState();
+  document.getElementById("advWrap").remove();
+  openDrawer(id);
+  render();
+  toast(`PO ${p.poNo} advanced to ${next}`);
+}
+
+function editPO(id) {
+  const p = state.pos.find(x=>x.id===id);
+  const editable = ["stockingLocation","portOfDest","productionSite","poValue","totalM2","skids","piNo","piDate","piValue","dpDate","dpAmount","productionStart","productionEtc","containerNo","bol","isf","shippingLine","actualDeparture","shippingEta","ciNo","ciDate","freight","inland","ciValue","balanceDue","bpDate","bpAmount","telexDate","arrivalDate","notes"];
+  const html = `
+    <div class="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center" id="editWrap" onclick="if(event.target.id==='editWrap')document.getElementById('editWrap').remove()">
+      <div class="bg-white rounded-lg shadow-xl w-[680px] max-w-full max-h-[90vh] overflow-y-auto">
+        <div class="px-5 py-3 border-b border-slate-200 flex items-center">
+          <div class="font-semibold">Edit PO ${p.poNo}</div>
+          <button class="ml-auto text-slate-400 hover:text-slate-700 text-xl" onclick="document.getElementById('editWrap').remove()">×</button>
+        </div>
+        <div class="p-5 grid grid-cols-2 gap-3">
+          ${editable.map(k=>`<div><label class="text-xs text-slate-500">${k}</label>
+            <input id="ed_${k}" value="${p[k]==null?"":p[k]}" class="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"></div>`).join("")}
+        </div>
+        <div class="px-5 py-3 border-t border-slate-200 flex items-center gap-2">
+          <button onclick="document.getElementById('editWrap').remove()" class="ml-auto px-3 py-1.5 text-sm rounded-md border border-slate-300">Cancel</button>
+          <button onclick='saveEdit(${id}, ${JSON.stringify(editable)})' class="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white">Save</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML("beforeend", html);
+}
+function saveEdit(id, keys) {
+  const p = state.pos.find(x=>x.id===id);
+  keys.forEach(k => { const el = document.getElementById("ed_"+k); if (el) p[k]=el.value; });
+  saveState(); document.getElementById("editWrap").remove(); openDrawer(id); render(); toast("Saved");
+}
+
+/* ============================================================
+   UPLOAD PO (PDF.js)
+   ============================================================ */
+function renderUpload() {
+  if (state.currentRole !== "HQ_SALES") {
+    return `<div class="bg-white rounded-lg border border-slate-200 p-10 text-center">
+      <div class="text-lg font-semibold mb-1">Uploading is restricted</div>
+      <div class="text-sm text-slate-500">Only the <b>HQ / Sales</b> role can upload new POs. Switch role in the top right.</div>
+    </div>`;
+  }
+  return `
+  <div class="grid grid-cols-2 gap-6">
+    <div class="bg-white rounded-lg border border-slate-200 p-6">
+      <div class="font-semibold mb-1">Upload a Purchase Order (PDF)</div>
+      <div class="text-sm text-slate-500 mb-4">Drop a typed PDF here. The app will extract text and pre-fill the fields. Review and commit.</div>
+      <div id="dropzone" class="border-2 border-dashed border-slate-300 rounded-lg p-10 text-center text-slate-500 hover:bg-slate-50 cursor-pointer">
+        <div class="text-4xl mb-2">⬆</div>
+        <div>Drag PDF here or click to browse</div>
+        <input type="file" id="pdfFile" accept="application/pdf" class="hidden">
+      </div>
+      <div id="pdfStatus" class="text-xs text-slate-500 mt-3"></div>
+      <details class="mt-4 text-sm">
+        <summary class="text-slate-600 cursor-pointer">No PDF handy? Paste PO text directly</summary>
+        <textarea id="pasteText" rows="6" placeholder="Paste raw PO text…" class="w-full border border-slate-300 rounded-md p-2 text-xs mt-2 font-mono"></textarea>
+        <button onclick="decodeText(document.getElementById('pasteText').value)" class="mt-2 px-3 py-1.5 text-sm rounded-md border border-slate-300">Decode pasted text</button>
+      </details>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-6">
+      <div class="font-semibold mb-3">Decoded preview</div>
+      <div id="decodePreview" class="text-sm text-slate-500">No PO decoded yet.</div>
+    </div>
+  </div>
+  <div class="mt-6 bg-white rounded-lg border border-slate-200 p-4">
+    <div class="font-semibold mb-2 text-sm">How decoding works</div>
+    <div class="text-xs text-slate-600 leading-relaxed">
+      The decoder uses pattern matching on the extracted PDF text: it looks for a PO number, PO date, line items with part numbers, dimensions, colors, quantities, and unit prices. Real-world POs vary, so the preview always lets you correct fields before committing. For accuracy, swap this prototype's regex with a custom template per customer once you've seen 2–3 sample formats.
+    </div>
+  </div>
+  `;
+}
+function wireUpload() {
+  if (state.currentRole !== "HQ_SALES") return;
+  const dz = document.getElementById("dropzone");
+  const inp = document.getElementById("pdfFile");
+  if (!dz || !inp) return;
+  dz.addEventListener("click", () => inp.click());
+  dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("bg-indigo-50"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("bg-indigo-50"));
+  dz.addEventListener("drop", e => { e.preventDefault(); dz.classList.remove("bg-indigo-50"); if (e.dataTransfer.files[0]) handlePdf(e.dataTransfer.files[0]); });
+  inp.addEventListener("change", e => { if (e.target.files[0]) handlePdf(e.target.files[0]); });
+}
+async function handlePdf(file) {
+  document.getElementById("pdfStatus").textContent = `Reading ${file.name}…`;
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+    let text = "";
+    for (let i=1; i<=pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(it=>it.str).join(" ") + "\n";
+    }
+    document.getElementById("pdfStatus").innerHTML = `<span class="text-emerald-700">Extracted ${text.length.toLocaleString()} chars from ${pdf.numPages} page${pdf.numPages>1?"s":""}.</span>`;
+    decodeText(text);
+  } catch (e) {
+    document.getElementById("pdfStatus").innerHTML = `<span class="text-red-600">Failed to read PDF: ${e.message}</span>`;
+  }
+}
+function decodeText(text) {
+  if (!text || !text.trim()) { document.getElementById("decodePreview").innerHTML = "Nothing to decode."; return; }
+  const guess = guessFields(text);
+  renderDecodePreview(guess, text);
+}
+function guessFields(text) {
+  const clean = text.replace(/\s+/g," ");
+  const out = {
+    poNo: pick(clean, [/P\.?\s*O\.?\s*(?:Number|No|#)\s*[:#-]?\s*([A-Z0-9\-]{6,20})/i, /Purchase\s+Order\s*(?:No|#)?\s*[:#-]?\s*([A-Z0-9\-]{6,20})/i, /\b(5\d{7})\b/]),
+    poDate: pickDate(clean, [/(?:PO|Order|Date)\s*(?:Date)?\s*[:#-]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i, /(?:PO|Order|Date)\s*(?:Date)?\s*[:#-]?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/]),
+    stockingLocation: pickFrom(clean, state.master.stockingLocations),
+    color: pickFrom(clean, ["GLOSSY BLACK","GLOSSY WHITE","SILVER FROST","CHARCOAL METALLIC","MATTE BLACK","PEPSI BLUE","VICTORY RED","INDIGO BLUE","ARMY GREEN","SAND SAHARA","SAND SAHARA MATTE","YELLOW","ORANGE","BRANDY WINE","PEWTER"])
+  };
+  // Lines — look for "2MM 49" x 96" ACP" style + qty
+  const lines = [];
+  const re = /(\d{1,3}MM\s*\d{1,3}[\"”']\s*x\s*\d{1,3}[\"”']\s*ACP)/gi;
+  let m, idx=0;
+  while ((m = re.exec(clean)) && idx<10) {
+    const ctx = clean.slice(Math.max(0,m.index-160), Math.min(clean.length, m.index+220));
+    const partNo = (ctx.match(/\b(6\d{5})\b/)||[])[1];
+    const qty = (ctx.match(/(\d{2,4})\s*(?:SHEETS?|PCS?|EA)/i)||[])[1];
+    const skids = (ctx.match(/(\d{1,2})\s*SKIDS?/i)||[])[1];
+    const price = (ctx.match(/\$?\s*(\d{2,4}\.\d{2})/)||[])[1];
+    lines.push({ lineNo: ++idx, partNo: partNo||"", size: m[1].toUpperCase(), color: out.color||"", sheets: Number(qty)||"", skids: Number(skids)||"", unitMsf: price?Number(price):"", extPo: "" });
+  }
+  out.lines = lines;
+  return out;
+}
+function pick(text, patterns) { for (const p of patterns) { const m = text.match(p); if (m && m[1]) return m[1]; } return ""; }
+function pickDate(text, patterns) { const raw = pick(text, patterns); if (!raw) return ""; const d = new Date(raw); return isNaN(d) ? raw : d.toISOString().slice(0,10); }
+function pickFrom(text, list) { const up = text.toUpperCase(); for (const item of list) { if (up.includes(item.toUpperCase())) return item; } return ""; }
+
+function renderDecodePreview(g, rawText) {
+  const fields = [
+    ["poNo","PO Number"],["poDate","PO Date"],["stockingLocation","Stocking location"],
+    ["portOfDest","Port of destination"]
+  ];
+  document.getElementById("decodePreview").innerHTML = `
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      ${fields.map(([k,l])=>`<div>
+        <label class="text-xs text-slate-500">${l}</label>
+        ${k==="stockingLocation"
+          ? `<select id="dec_${k}" class="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+              <option value="">—</option>
+              ${state.master.stockingLocations.map(o=>`<option ${g[k]===o?"selected":""} value="${o}">${o}</option>`).join("")}
+            </select>`
+          : `<input id="dec_${k}" value="${g[k]||""}" class="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm">`
+        }
+      </div>`).join("")}
+    </div>
+    <div class="text-xs font-semibold text-slate-500 uppercase mb-2">Line items (${g.lines.length})</div>
+    <div class="border border-slate-200 rounded-md overflow-hidden mb-3">
+      <table class="tbl w-full text-xs">
+        <thead><tr><th>#</th><th>Part #</th><th>Size</th><th>Color</th><th class="text-right">Sheets</th><th class="text-right">Skids</th><th class="text-right">Unit</th></tr></thead>
+        <tbody id="decLines">
+          ${g.lines.map((l,i)=>`<tr>
+            <td>${l.lineNo}</td>
+            <td><input value="${l.partNo}" data-i="${i}" data-k="partNo" class="dec-line w-20 border-b border-slate-200 text-xs"></td>
+            <td><input value="${l.size}" data-i="${i}" data-k="size" class="dec-line w-40 border-b border-slate-200 text-xs"></td>
+            <td><input value="${l.color}" data-i="${i}" data-k="color" class="dec-line w-32 border-b border-slate-200 text-xs"></td>
+            <td><input value="${l.sheets}" data-i="${i}" data-k="sheets" class="dec-line w-16 border-b border-slate-200 text-xs text-right"></td>
+            <td><input value="${l.skids}" data-i="${i}" data-k="skids" class="dec-line w-12 border-b border-slate-200 text-xs text-right"></td>
+            <td><input value="${l.unitMsf}" data-i="${i}" data-k="unitMsf" class="dec-line w-16 border-b border-slate-200 text-xs text-right"></td>
+          </tr>`).join("") || `<tr><td colspan="7" class="text-center text-slate-400 py-3">No lines detected — add manually after committing.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <button onclick="commitDecoded()" class="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md">Create PO from decoded data</button>
+    <details class="mt-4">
+      <summary class="text-xs text-slate-500">View raw extracted text</summary>
+      <pre class="text-[10px] bg-slate-50 p-2 mt-2 max-h-40 overflow-auto whitespace-pre-wrap">${(rawText||"").slice(0,4000)}</pre>
+    </details>
+  `;
+  window._decodedGuess = g;
+}
+function commitDecoded() {
+  const g = window._decodedGuess || {lines:[]};
+  // Read user-corrected lines back
+  document.querySelectorAll(".dec-line").forEach(inp => {
+    const i = +inp.dataset.i, k = inp.dataset.k;
+    if (g.lines[i]) g.lines[i][k] = inp.value;
+  });
+  const poNo = document.getElementById("dec_poNo").value.trim();
+  if (!poNo) { alert("PO Number is required."); return; }
+  if (state.pos.some(p=>p.poNo===poNo)) { if (!confirm(`PO ${poNo} already exists. Add as a new rev?`)) return; }
+  const stocking = document.getElementById("dec_stockingLocation").value;
+  const port = state.master.portsOfEntry[stocking] || "";
+  const lines = g.lines.map((l,i)=>({
+    lineNo: l.lineNo||i+1, partNo: l.partNo||"", custPartNo:"", size: l.size||"",
+    widthMm:"", lengthMm:"", color: l.color||"", qtyMsf:"", qtyM2: estM2(l), sheets: Number(l.sheets)||0,
+    skids: Number(l.skids)||0, unitMsf: Number(l.unitMsf)||0, unitM2:"", extPo: estExt(l), leadTime: state.master.leadDays.standard
+  }));
+  const po = normalizePO({
+    poNo, rev: 0, status: "PO Received",
+    poDate: document.getElementById("dec_poDate").value || todayISO(),
+    stockingLocation: stocking, portOfDest: port,
+    skids: sumLines(lines, "skids"),
+    poValue: sumLines(lines, "extPo"),
+    totalM2: sumLines(lines, "qtyM2"),
+    lines,
+    history: [{stage:"PO Received", by: state.currentRole, at: todayISO(), note:"Uploaded via PDF decoder"}]
+  }, state.pos.length);
+  po.id = state.nextId++;
+  state.pos.unshift(po);
+  saveState();
+  currentTab = "orders";
+  render();
+  toast(`PO ${poNo} created with ${lines.length} line${lines.length===1?"":"s"}.`);
+}
+function estM2(l) {
+  // Try to compute from size string e.g. "2MM 49\" x 96\" ACP"
+  const m = (l.size||"").match(/(\d{2,3})[\"”']\s*x\s*(\d{2,3})[\"”']/);
+  if (!m) return "";
+  const w = Number(m[1]) * 0.0254, h = Number(m[2]) * 0.0254;
+  return (w*h*(Number(l.sheets)||0)).toFixed(2);
+}
+function estExt(l) {
+  const m = estM2(l); if (!m) return "";
+  // ext = m2 * unit_m2 if available else sheets * unit_msf / 1000
+  if (l.unitMsf) return ((Number(l.sheets)*Number(l.unitMsf))/1000).toFixed(2);
+  return "";
+}
+
+/* ============================================================
+   ITEM SUMMARY
+   ============================================================ */
+function renderItemSummary() {
+  const locs = state.master.stockingLocations;
+  // Two pivots: Backlog (status before Container Loaded) and Shipped (Container Loaded or later)
+  const itemMap = {}; // partNo -> {desc, byLoc: {loc: {backlog, shipped}}}
+  state.pos.filter(p=>p.active!==false).forEach(p => {
+    const shipped = stageIndex(p.status) >= stageIndex("Container Loaded");
+    p.lines.forEach(l => {
+      const key = l.partNo || l.size;
+      if (!itemMap[key]) itemMap[key] = { desc: `${l.size||""} ${l.color||""}`.trim(), byLoc: {} };
+      const loc = p.stockingLocation;
+      itemMap[key].byLoc[loc] = itemMap[key].byLoc[loc] || {backlog:0, shipped:0};
+      if (shipped) itemMap[key].byLoc[loc].shipped += Number(l.sheets)||0;
+      else itemMap[key].byLoc[loc].backlog += Number(l.sheets)||0;
+    });
+  });
+  const items = Object.entries(itemMap).sort();
+  function pivotTable(kind) {
+    return `<table class="tbl w-full text-xs">
+      <thead><tr>
+        <th>Code</th><th>Description</th>${locs.map(l=>`<th class="text-right">${l.split(",")[0]}</th>`).join("")}<th class="text-right">Total</th>
+      </tr></thead>
+      <tbody>
+        ${items.map(([code, m])=>{
+          const totals = locs.map(l => (m.byLoc[l]||{})[kind]||0);
+          const sum = totals.reduce((a,b)=>a+b,0);
+          if (!sum) return "";
+          return `<tr><td class="font-mono">${code}</td><td>${m.desc}</td>${totals.map(v=>`<td class="text-right ${v?"font-semibold":"text-slate-300"}">${v||""}</td>`).join("")}<td class="text-right font-semibold">${sum}</td></tr>`;
+        }).join("") || `<tr><td colspan="${locs.length+3}" class="text-center text-slate-400 py-6">No items</td></tr>`}
+      </tbody>
+    </table>`;
+  }
+  return `
+    <div class="grid grid-cols-1 gap-6">
+      <div class="bg-white rounded-lg border border-slate-200 p-4">
+        <div class="font-semibold mb-3">Backlog (sheets) — orders not yet container-loaded</div>
+        <div class="overflow-x-auto">${pivotTable("backlog")}</div>
+      </div>
+      <div class="bg-white rounded-lg border border-slate-200 p-4">
+        <div class="font-semibold mb-3">Shipped (sheets) — container-loaded or later</div>
+        <div class="overflow-x-auto">${pivotTable("shipped")}</div>
+      </div>
+    </div>
+  `;
+}
+
+/* ============================================================
+   PRICING + MASTER DATA
+   ============================================================ */
+function renderPricing() {
+  const { headers, rows } = state.pricing || {headers:[], rows:[]};
+  return `
+  <div class="bg-white rounded-lg border border-slate-200 p-4">
+    <div class="font-semibold mb-3">Pricing Table (eff 27-Jan-2026)</div>
+    <div class="overflow-x-auto">
+      <table class="tbl w-full text-xs">
+        <thead><tr>${headers.map(h=>`<th>${h||""}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr>${r.map(c=>`<td>${c==null?"":c}</td>`).join("")}</tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+function renderMaster() {
+  const m = state.master;
+  return `
+  <div class="grid grid-cols-2 gap-6">
+    <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <div class="font-semibold mb-2">OTC Process Stages</div>
+      <ol class="list-decimal pl-5 text-sm space-y-1">${STAGES.map(s=>`<li>${s}</li>`).join("")}</ol>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <div class="font-semibold mb-2">UAE Production sites</div>
+      <ul class="list-disc pl-5 text-sm">${m.uaeSites.map(s=>`<li>${s}</li>`).join("")}</ul>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <div class="font-semibold mb-2">Stocking locations → Port of entry</div>
+      <table class="tbl w-full text-xs">
+        <thead><tr><th>Stocking location</th><th>Port</th><th class="text-right">Sailing days</th></tr></thead>
+        <tbody>${m.stockingLocations.map(l=>{ const port=m.portsOfEntry[l]||""; const days=m.sailingDays[port]||""; return `<tr><td>${l}</td><td>${port}</td><td class="text-right">${days}</td></tr>`; }).join("")}</tbody>
+      </table>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-4">
+      <div class="font-semibold mb-2">Defaults</div>
+      <div class="text-sm space-y-1">
+        <div>Freight (default): <b>${fmtMoney(m.freight)}</b></div>
+        <div>Inland (default): <b>${fmtMoney(m.inland)}</b></div>
+        <div>Sheets per skid: <b>${m.sheetsPerSkid}</b></div>
+        <div>Container max (m²): <b>${m.containerMaxM2}</b></div>
+        <div>Lead time — standard colors: <b>${m.leadDays.standard} days</b></div>
+        <div>Lead time — non-standard colors: <b>${m.leadDays.nonStandard} days</b></div>
+      </div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-4 col-span-2">
+      <div class="font-semibold mb-2">Standard colors</div>
+      <table class="tbl w-full text-xs"><thead><tr><th>Code</th><th>Description</th></tr></thead>
+        <tbody>${Object.entries(m.standardColors).map(([c,d])=>`<tr><td class="font-mono">${c}</td><td>${d}</td></tr>`).join("")}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+</script>
+</body>
+</html>

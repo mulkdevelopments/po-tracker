@@ -1,0 +1,228 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  HQ_SALES
+  UAE_JEBEL_ALI
+  UAE_SHARJAH
+  UAE_ABU_DHABI
+  LOGISTICS
+  VIEWER
+}
+
+enum AccessLevel {
+  FULL
+  READ_WRITE
+  READ_ONLY
+}
+
+enum Company {
+  UFP
+  SYNERGY
+}
+
+model User {
+  id              String      @id @default(cuid())
+  name            String
+  email           String      @unique
+  passwordHash    String
+  role            UserRole    @default(VIEWER)
+  accessLevel     AccessLevel @default(READ_ONLY)
+  restrictedPages String[]    @default([])
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  createdById     String?
+  createdBy       User?       @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers    User[]      @relation("UserCreatedBy")
+  poHistory       PoHistory[]
+}
+
+model PurchaseOrder {
+  id                Int         @id @default(autoincrement())
+  company           Company     @default(UFP)
+  siNo              Int?
+  poNo              String
+  rev               Int         @default(0)
+  concat            String?
+  status            String      @default("PO Received")
+  poDate            String?
+  active            Boolean     @default(true)
+  skids             Float?
+  stockingLocation  String?
+  portOfDest        String?
+  poValue           Float?
+  totalM2           Float?
+  productionSite    String?
+  productionStart   String?
+  productionEtc     String?
+  piNo              String?
+  piDate            String?
+  poToPi            Int?
+  piValue           Float?
+  dpDate            String?
+  piToDp            Int?
+  dpAmount          Float?
+  shippingEta       String?
+  bol               String?
+  isf               String?
+  containerNo       String?
+  shippingLine      String?
+  shippingUrl       String?
+  actualDeparture   String?
+  dpToShip          Int?
+  ciNo              String?
+  ciDate            String?
+  revisionSent      String?
+  freight           Float?
+  inland            Float?
+  ciValue           Float?
+  balanceDue        Float?
+  bpDate            String?
+  ciToBp            Int?
+  bpAmount          Float?
+  telexDate         String?
+  bpToTelex         Int?
+  arrivalDate       String?
+  notes             String?
+  soNo                 String?
+  standardColorsOnly   String?
+  allMaterialAvailable String?
+  productionBegin      String?
+  productionComplete   String?
+  dispatchFromFactory  String?
+  piSent               String?
+  productionStatus     String?
+  productionNotes      String?
+  lines             PoLine[]
+  history           PoHistory[]
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([poNo])
+  @@index([status])
+  @@index([company])
+}
+
+model PoLine {
+  id         Int           @id @default(autoincrement())
+  poId       Int
+  po         PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  lineNo     Int
+  partNo     String?
+  custPartNo String?
+  size       String?
+  widthMm    Float?
+  lengthMm   Float?
+  color      String?
+  qtyMsf     Float?
+  qtyM2      Float?
+  sheets     Float?
+  skids      Float?
+  unitMsf    Float?
+  unitM2     Float?
+  extPo      Float?
+  extInv     Float?
+  leadTime   Int?
+  notes      String?
+}
+
+// ---------- Shared reference / master data (global, not per-company) ----------
+
+model ProcessStage {
+  id    Int    @id @default(autoincrement())
+  order Int    @unique
+  name  String @unique
+}
+
+model Port {
+  id          Int     @id @default(autoincrement())
+  name        String  @unique
+  sailingDays Int?
+  freight     Float?
+  inland      Float?
+}
+
+model StockingLocation {
+  id          Int     @id @default(autoincrement())
+  name        String  @unique
+  arrivalPort String?
+}
+
+model ShippingLine {
+  id          Int     @id @default(autoincrement())
+  name        String  @unique
+  trackingUrl String?
+}
+
+model Color {
+  id         Int     @id @default(autoincrement())
+  code       String  @unique
+  name       String?
+  isStandard Boolean @default(false)
+}
+
+model Product {
+  id              Int     @id @default(autoincrement())
+  partNo          String  @unique
+  custPartNo      String?
+  itemType        String?
+  surface         String?
+  construction    String?
+  thickness       String?
+  widthIn         Float?
+  widthMm         Float?
+  lengthIn        Float?
+  lengthMm        Float?
+  description     String?
+  colorName       String?
+  vendorColorCode String?
+  pricePerSqft    Float?
+  pricePerM2      Float?
+  pricePerMsq     Float?
+  pricePerSheet   Float?
+  leadTimeDays    Int?
+}
+
+model AppConfig {
+  id                  Int     @id @default(1)
+  sheetsPerSkid       Int?
+  downpaymentPct      Float?
+  containerMaxM2      Float?
+  leadTimeStandard    Int?
+  leadTimeNonStandard Int?
+  originPort          String?
+  pricingNote         String?
+  productionLines     Int?    @default(2)
+  m2PerLinePerDay     Float?  @default(3000)
+  m2PerContainer      Float?  @default(8300)
+  workingDaysPerMonth Int?    @default(26)
+}
+
+model PoHistory {
+  id        Int           @id @default(autoincrement())
+  poId      Int
+  po        PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  stage     String
+  note      String?
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id])
+  byRole    String?
+  at        String
+  createdAt DateTime      @default(now())
+}
+
+model AppSettings {
+  id        Int      @id @default(autoincrement())
+  company   Company  @unique
+  master    Json
+  pricing   Json
+  updatedAt DateTime @updatedAt
+}
