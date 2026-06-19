@@ -1,6 +1,7 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { PrismaClient, Prisma } from "@prisma/client";
+import { DEFAULT_PI_DOCUMENT } from "./piDocumentDefaults.js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -13,7 +14,7 @@ const dataDir = path.join(__dirname, "../prisma/seed-data");
 interface Reference {
   stages: { order: number; name: string }[];
   ports: { name: string; sailingDays: number | null; freight: number | null; inland: number | null }[];
-  stockingLocations: { name: string; arrivalPort: string | null }[];
+  stockingLocations: { name: string; arrivalPort: string | null; email?: string | null }[];
   shippingLines: { name: string; trackingUrl: string | null }[];
   colors: { code: string; name: string | null; isStandard: boolean }[];
   products: Record<string, unknown>[];
@@ -24,6 +25,10 @@ interface Reference {
     leadTimeStandard: number | null;
     leadTimeNonStandard: number | null;
     originPort: string | null;
+    productionLines?: number | null;
+    m2PerLinePerDay?: number | null;
+    m2PerContainer?: number | null;
+    workingDaysPerMonth?: number | null;
   };
   pricingNote: string | null;
 }
@@ -111,13 +116,11 @@ async function seedReference(ref: Reference) {
     })),
   });
 
-  // Capacity-planning defaults (app-level config, not from the workbook).
-  // Set only on first create so in-app edits survive re-seeds.
   const capacityDefaults = {
-    productionLines: 2,
-    m2PerLinePerDay: 3000,
-    m2PerContainer: 8300,
-    workingDaysPerMonth: 26,
+    productionLines: ref.config.productionLines ?? 2,
+    m2PerLinePerDay: ref.config.m2PerLinePerDay ?? 3000,
+    m2PerContainer: ref.config.m2PerContainer ?? 8300,
+    workingDaysPerMonth: ref.config.workingDaysPerMonth ?? 26,
   };
   await prisma.appConfig.upsert({
     where: { id: 1 },
@@ -145,18 +148,22 @@ function buildAppSettings(ref: Reference) {
   const master = {
     stages: ref.stages.map((x) => x.name),
     stockingLocations: ref.stockingLocations.map((x) => x.name),
-    uaeSites: ["UAE - Jebel Ali", "UAE - Sharjah", "UAE - Abu Dhabi"],
+    uaeSites: ["UAE - Hamriya", "UAE - Jerf"],
+    defaultProductionSite: "UAE - Hamriya",
+    productionEtcWeeks: 12,
     portsOfEntry,
     sailingDays,
     freight: ref.ports[0]?.freight ?? null,
     inland: ref.ports[0]?.inland ?? null,
     sheetsPerSkid: ref.config.sheetsPerSkid,
     containerMaxM2: ref.config.containerMaxM2,
+    downpaymentPct: ref.config.downpaymentPct ?? 0.5,
     leadDays: {
       standard: ref.config.leadTimeStandard,
       nonStandard: ref.config.leadTimeNonStandard,
     },
     standardColors,
+    piDocument: DEFAULT_PI_DOCUMENT,
   };
 
   const pricingHeaders = [
@@ -178,12 +185,27 @@ function buildAppSettings(ref: Reference) {
 async function seedAppSettings(ref: Reference) {
   const { master, pricing } = buildAppSettings(ref);
   for (const company of ["UFP", "SYNERGY"] as const) {
+    const existing = await prisma.appSettings.findUnique({ where: { company } });
+    const existingMaster =
+      existing?.master && typeof existing.master === "object"
+        ? (existing.master as Record<string, unknown>)
+        : {};
+    const mergedMaster = {
+      ...master,
+      piDocument: existingMaster.piDocument ?? DEFAULT_PI_DOCUMENT,
+      uaeSites: existingMaster.uaeSites ?? master.uaeSites,
+      defaultProductionSite: existingMaster.defaultProductionSite ?? master.defaultProductionSite,
+      productionEtcWeeks: existingMaster.productionEtcWeeks ?? master.productionEtcWeeks,
+    };
     await prisma.appSettings.upsert({
       where: { company },
-      update: { master: master as Prisma.InputJsonValue, pricing: pricing as Prisma.InputJsonValue },
+      update: {
+        master: mergedMaster as Prisma.InputJsonValue,
+        pricing: pricing as Prisma.InputJsonValue,
+      },
       create: {
         company,
-        master: master as Prisma.InputJsonValue,
+        master: mergedMaster as Prisma.InputJsonValue,
         pricing: pricing as Prisma.InputJsonValue,
       },
     });

@@ -1,17 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
-import { ROLE_LABELS, PAGES } from "../types";
+import { ROLE_LABELS, PAGES, ASSIGNABLE_ROLES } from "../types";
 import type { AppUser } from "../types";
-
-const ASSIGNABLE_ROLES = [
-  "HQ_SALES",
-  "UAE_JEBEL_ALI",
-  "UAE_SHARJAH",
-  "UAE_ABU_DHABI",
-  "LOGISTICS",
-  "VIEWER",
-];
 
 export default function UsersPage() {
   const { isSuperAdmin } = useAuth();
@@ -23,8 +14,7 @@ export default function UsersPage() {
     name: "",
     email: "",
     password: "",
-    role: "VIEWER",
-    accessLevel: "READ_ONLY",
+    role: "MAINTAINER",
     restrictedPages: [] as string[],
   });
   const [error, setError] = useState("");
@@ -53,8 +43,7 @@ export default function UsersPage() {
       name: "",
       email: "",
       password: "",
-      role: "VIEWER",
-      accessLevel: "READ_ONLY",
+      role: "MAINTAINER",
       restrictedPages: [],
     });
     setEditing(null);
@@ -71,7 +60,6 @@ export default function UsersPage() {
           name: form.name,
           email: form.email,
           role: form.role,
-          accessLevel: form.accessLevel,
           restrictedPages: form.restrictedPages,
         };
         if (form.password) payload.password = form.password;
@@ -93,7 +81,6 @@ export default function UsersPage() {
       email: u.email,
       password: "",
       role: u.role,
-      accessLevel: u.accessLevel,
       restrictedPages: u.restrictedPages,
     });
     setShowForm(true);
@@ -179,18 +166,6 @@ export default function UsersPage() {
                 ))}
               </select>
             </div>
-            <div>
-              <label className="text-xs text-slate-500">Access level</label>
-              <select
-                value={form.accessLevel}
-                onChange={(e) => setForm({ ...form, accessLevel: e.target.value })}
-                className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
-              >
-                <option value="FULL">Full access (read + write all allowed pages)</option>
-                <option value="READ_WRITE">Read & write (within role)</option>
-                <option value="READ_ONLY">View only (no edits)</option>
-              </select>
-            </div>
           </div>
           <div>
             <label className="text-xs text-slate-500 block mb-2">Restrict from pages (additional)</label>
@@ -234,7 +209,6 @@ export default function UsersPage() {
               <th>Name</th>
               <th>Email</th>
               <th>Role</th>
-              <th>Access</th>
               <th>Restricted pages</th>
               <th>Status</th>
               <th></th>
@@ -246,7 +220,6 @@ export default function UsersPage() {
                 <td className="font-medium">{u.name}</td>
                 <td>{u.email}</td>
                 <td>{ROLE_LABELS[u.role] || u.role}</td>
-                <td>{u.accessLevel.replace("_", " ")}</td>
                 <td className="text-xs">{u.restrictedPages.join(", ") || "—"}</td>
                 <td>{u.isActive ? "Active" : "Disabled"}</td>
                 <td className="text-right space-x-2">

@@ -1,10 +1,14 @@
 export const STAGES = [
   "PO Received",
-  "Proforma Invoice Sent",
+  "PI Generated",
+  "PI Approved",
   "Downpayment Received",
   "In Production",
+  "Production Complete",
   "Container Loaded",
-  "Commercial Invoice Sent",
+  "CI sent",
+  "CI approved",
+  "BL",
   "Balance Payment Received",
   "Telex / Seaway Released",
   "Arrived",
@@ -12,11 +16,17 @@ export const STAGES = [
 
 export const STAGE_COLORS: Record<string, string> = {
   "PO Received": "bg-slate-100 text-slate-700",
-  "Proforma Invoice Sent": "bg-amber-100 text-amber-800",
+  "PI Generated": "bg-amber-100 text-amber-800",
+  "PI Approved": "bg-green-100 text-green-800",
+  "PI Rejected": "bg-red-100 text-red-800",
   "Downpayment Received": "bg-yellow-100 text-yellow-800",
   "In Production": "bg-orange-100 text-orange-800",
+  "Production Complete": "bg-teal-100 text-teal-800",
   "Container Loaded": "bg-blue-100 text-blue-800",
-  "Commercial Invoice Sent": "bg-cyan-100 text-cyan-800",
+  "CI sent": "bg-cyan-100 text-cyan-800",
+  "CI approved": "bg-green-100 text-green-800",
+  "CI Rejected": "bg-red-100 text-red-800",
+  BL: "bg-sky-100 text-sky-800",
   "Balance Payment Received": "bg-violet-100 text-violet-800",
   "Telex / Seaway Released": "bg-indigo-100 text-indigo-800",
   "Arrived": "bg-emerald-100 text-emerald-800",
@@ -26,15 +36,22 @@ export const STAGE_COLORS: Record<string, string> = {
 
 export const ROLE_LABELS: Record<string, string> = {
   SUPER_ADMIN: "Super Admin",
-  HQ_SALES: "HQ / Sales",
-  UAE_JEBEL_ALI: "UAE – Jebel Ali",
-  UAE_SHARJAH: "UAE – Sharjah",
-  UAE_ABU_DHABI: "UAE – Abu Dhabi",
+  MAINTAINER: "Maintainer",
+  MANAGER: "Manager",
+  FINANCE: "Finance",
   LOGISTICS: "Logistics",
+  SUPERVISOR: "Supervisor",
   VIEWER: "Viewer",
+  // Legacy roles (shown on old history entries)
+  HQ_SALES: "Finance",
+  UAE_JEBEL_ALI: "Manager",
+  UAE_SHARJAH: "Manager",
+  UAE_ABU_DHABI: "Manager",
 };
 
-export const PAGES = ["dashboard", "orders", "upload", "items", "pricing", "master", "users"] as const;
+export const ASSIGNABLE_ROLES = ["MAINTAINER", "MANAGER", "FINANCE", "LOGISTICS", "SUPERVISOR", "VIEWER"] as const;
+
+export const PAGES = ["dashboard", "orders", "production", "upload", "items", "pricing", "master", "users"] as const;
 export type Page = (typeof PAGES)[number];
 
 export interface AuthUser {
@@ -65,6 +82,10 @@ export interface PoLine {
   extInv?: number | null;
   leadTime?: number | null;
   notes?: string | null;
+  actualQtyM2?: number | null;
+  actualSheets?: number | null;
+  actualSkids?: number | null;
+  actualNotes?: string | null;
 }
 
 export interface PoHistory {
@@ -98,6 +119,9 @@ export interface PurchaseOrder {
   piDate?: string | null;
   poToPi?: number | null;
   piValue?: number | null;
+  piApprovedDate?: string | null;
+  piResubmitCount?: number | null;
+  piRejectedNote?: string | null;
   dpDate?: string | null;
   piToDp?: number | null;
   dpAmount?: number | null;
@@ -111,6 +135,9 @@ export interface PurchaseOrder {
   dpToShip?: number | null;
   ciNo?: string | null;
   ciDate?: string | null;
+  ciApprovedDate?: string | null;
+  ciResubmitCount?: number | null;
+  ciRejectedNote?: string | null;
   revisionSent?: string | null;
   freight?: number | null;
   inland?: number | null;
@@ -132,6 +159,7 @@ export interface PurchaseOrder {
   piSent?: string | null;
   productionStatus?: string | null;
   productionNotes?: string | null;
+  stockingEmailSentAt?: string | null;
   lines: PoLine[];
   history: PoHistory[];
 }
@@ -140,6 +168,8 @@ export interface MasterData {
   stages?: string[];
   stockingLocations?: string[];
   uaeSites?: string[];
+  defaultProductionSite?: string;
+  productionEtcWeeks?: number;
   portsOfEntry?: Record<string, string>;
   sailingDays?: Record<string, number>;
   freight?: number;
@@ -152,6 +182,30 @@ export interface MasterData {
   m2PerLinePerDay?: number;
   m2PerContainer?: number;
   workingDaysPerMonth?: number;
+  downpaymentPct?: number;
+  piDocument?: PiDocumentSettings;
+}
+
+export interface PiDocumentSettings {
+  issuerName?: string;
+  issuerAddress?: string;
+  customerName?: string;
+  customerTrn?: string;
+  salesPerson?: string;
+  currency?: string;
+  paymentTerms?: string;
+  incoterms?: string;
+  partialDelivery?: string;
+  shipmentMode?: string;
+  productCategory?: string;
+  bankName?: string;
+  accountTitle?: string;
+  accountNo?: string;
+  swift?: string;
+  iban?: string;
+  bankAddress?: string;
+  terms?: string[];
+  taxNote?: string;
 }
 
 export interface PricingData {
@@ -162,7 +216,7 @@ export interface PricingData {
 export interface ReferenceData {
   stages: { id: number; order: number; name: string }[];
   ports: { id: number; name: string; sailingDays: number | null; freight: number | null; inland: number | null }[];
-  stockingLocations: { id: number; name: string; arrivalPort: string | null }[];
+  stockingLocations: { id: number; name: string; arrivalPort: string | null; email: string | null }[];
   shippingLines: { id: number; name: string; trackingUrl: string | null }[];
   colors: { id: number; code: string; name: string | null; isStandard: boolean }[];
   products: {

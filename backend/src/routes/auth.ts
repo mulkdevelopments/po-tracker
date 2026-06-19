@@ -2,7 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma, requireAuth, requireSuperAdmin, signToken, toAuthUser } from "../middleware/auth.js";
-import { PAGES, ROLE_LABELS } from "../constants.js";
+import { PAGES, ROLE_LABELS, ASSIGNABLE_ROLES, accessLevelForRole } from "../constants.js";
 
 const router = Router();
 
@@ -48,25 +48,18 @@ router.get("/me", requireAuth, async (req, res) => {
 
 router.get("/roles", requireAuth, (_req, res) => {
   res.json({
-    roles: Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label })),
+    roles: ASSIGNABLE_ROLES.map((value) => ({ value, label: ROLE_LABELS[value] })),
     pages: PAGES,
-    accessLevels: ["FULL", "READ_WRITE", "READ_ONLY"],
   });
 });
+
+const assignableRole = z.enum(["MAINTAINER", "MANAGER", "FINANCE", "LOGISTICS", "SUPERVISOR", "VIEWER"]);
 
 const createUserSchema = z.object({
   name: z.string().min(1).max(100),
   email: z.string().email(),
   password: z.string().min(8),
-  role: z.enum([
-    "HQ_SALES",
-    "UAE_JEBEL_ALI",
-    "UAE_SHARJAH",
-    "UAE_ABU_DHABI",
-    "LOGISTICS",
-    "VIEWER",
-  ]),
-  accessLevel: z.enum(["FULL", "READ_WRITE", "READ_ONLY"]).default("READ_ONLY"),
+  role: assignableRole,
   restrictedPages: z.array(z.string()).default([]),
 });
 
@@ -105,7 +98,7 @@ router.post("/users", requireAuth, requireSuperAdmin, async (req, res) => {
       email: data.email.toLowerCase(),
       passwordHash,
       role: data.role,
-      accessLevel: data.accessLevel,
+      accessLevel: accessLevelForRole(data.role),
       restrictedPages: data.restrictedPages,
       createdById: req.user!.id,
     },
@@ -127,10 +120,7 @@ const updateUserSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   email: z.string().email().optional(),
   password: z.string().min(8).optional(),
-  role: z
-    .enum(["HQ_SALES", "UAE_JEBEL_ALI", "UAE_SHARJAH", "UAE_ABU_DHABI", "LOGISTICS", "VIEWER"])
-    .optional(),
-  accessLevel: z.enum(["FULL", "READ_WRITE", "READ_ONLY"]).optional(),
+  role: assignableRole.optional(),
   restrictedPages: z.array(z.string()).optional(),
   isActive: z.boolean().optional(),
 });
@@ -155,6 +145,7 @@ router.patch("/users/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   const update: Record<string, unknown> = { ...data };
   if (data.email) update.email = data.email.toLowerCase();
   if (data.password) update.passwordHash = await bcrypt.hash(data.password, 12);
+  if (data.role) update.accessLevel = accessLevelForRole(data.role);
   delete update.password;
 
   const user = await prisma.user.update({

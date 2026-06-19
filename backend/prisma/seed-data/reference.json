@@ -6,38 +6,54 @@
     },
     {
       "order": 2,
-      "name": "Proforma Invoice Sent"
+      "name": "PI Generated"
     },
     {
       "order": 3,
-      "name": "Downpayment Received"
+      "name": "PI Approved"
     },
     {
       "order": 4,
-      "name": "In Production"
+      "name": "Downpayment Received"
     },
     {
       "order": 5,
-      "name": "Container Loaded"
+      "name": "In Production"
     },
     {
       "order": 6,
-      "name": "Commercial Invoice Sent"
+      "name": "Production Complete"
     },
     {
       "order": 7,
-      "name": "Balance Payment Received"
+      "name": "Container Loaded"
     },
     {
       "order": 8,
-      "name": "Telex / Seaway Released"
+      "name": "CI sent"
     },
     {
       "order": 9,
-      "name": "PO Revised"
+      "name": "CI approved"
     },
     {
       "order": 10,
+      "name": "BL"
+    },
+    {
+      "order": 11,
+      "name": "Balance Payment Received"
+    },
+    {
+      "order": 12,
+      "name": "Telex / Seaway Released"
+    },
+    {
+      "order": 13,
+      "name": "PO Revised"
+    },
+    {
+      "order": 14,
       "name": "PO Cancelled"
     }
   ],
@@ -70,43 +86,53 @@
   "stockingLocations": [
     {
       "name": "South Paris, ME",
-      "arrivalPort": "Baltimore"
+      "arrivalPort": "Baltimore",
+      "email": "southparis.me@ufp.local"
     },
     {
       "name": "Ashburn, GA",
-      "arrivalPort": "Savannah"
+      "arrivalPort": "Savannah",
+      "email": "ashburn.ga@ufp.local"
     },
     {
       "name": "Hillsboro, TX",
-      "arrivalPort": "Houston"
+      "arrivalPort": "Houston",
+      "email": "hillsboro.tx@ufp.local"
     },
     {
       "name": "Nampa, ID",
-      "arrivalPort": "Oakland"
+      "arrivalPort": "Oakland",
+      "email": "nampa.id@ufp.local"
     },
     {
       "name": "Granger, IN",
-      "arrivalPort": "Baltimore"
+      "arrivalPort": "Baltimore",
+      "email": "granger.in@ufp.local"
     },
     {
       "name": "Gordon, PA",
-      "arrivalPort": "Baltimore"
+      "arrivalPort": "Baltimore",
+      "email": "gordon.pa@ufp.local"
     },
     {
       "name": "Minneota, MN",
-      "arrivalPort": "Houston"
+      "arrivalPort": "Houston",
+      "email": "minneota.mn@ufp.local"
     },
     {
       "name": "Houston, TX",
-      "arrivalPort": "Houston"
+      "arrivalPort": "Houston",
+      "email": "houston.tx@ufp.local"
     },
     {
       "name": "Savannah, GA",
-      "arrivalPort": "Savannah"
+      "arrivalPort": "Savannah",
+      "email": "savannah.ga@ufp.local"
     },
     {
       "name": "Twin Falls, ID",
-      "arrivalPort": "Oakland"
+      "arrivalPort": "Oakland",
+      "email": "twinfalls.id@ufp.local"
     }
   ],
   "shippingLines": [
@@ -1468,7 +1494,11 @@
     "containerMaxM2": 8600,
     "leadTimeStandard": 45,
     "leadTimeNonStandard": 90,
-    "originPort": "Jebel Ali"
+    "originPort": "Jebel Ali",
+    "productionLines": 2,
+    "m2PerLinePerDay": 3000,
+    "m2PerContainer": 8300,
+    "workingDaysPerMonth": 26
   },
   "pricingNote": "Price per m2 will increase by $0.20 for all items after the 14 POs are received for Houston"
 }

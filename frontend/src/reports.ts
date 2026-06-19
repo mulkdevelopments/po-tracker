@@ -4,11 +4,15 @@ import type { PurchaseOrder, ReferenceData } from "./types";
 // based on the arrival date, not a workflow status).
 export const PIPELINE_STAGES = [
   "PO Received",
-  "Proforma Invoice Sent",
+  "PI Generated",
+  "PI Approved",
   "Downpayment Received",
   "In Production",
+  "Production Complete",
   "Container Loaded",
-  "Commercial Invoice Sent",
+  "CI sent",
+  "CI approved",
+  "BL",
   "Balance Payment Received",
   "Telex / Seaway Released",
 ] as const;
@@ -95,8 +99,28 @@ export interface DashboardReport {
   cycle: { title: string; avgDays: number | null; metrics: { label: string; value: string }[] }[];
 }
 
-export function computeDashboard(pos: PurchaseOrder[], ref: ReferenceData): DashboardReport {
-  const active = pos.filter((p) => p.active !== false);
+const yearOf = (s?: string | null): number | null => {
+  if (!s || s === "N/A") return null;
+  const trimmed = String(s).trim();
+  const m = trimmed.match(/^(\d{4})/);
+  if (m) return Number(m[1]);
+  const d = new Date(trimmed);
+  return isNaN(d.getTime()) ? null : d.getFullYear();
+};
+
+/** All orders whose PO date falls in the selected calendar year. */
+export function dashboardYearOrders(pos: PurchaseOrder[], year: number): PurchaseOrder[] {
+  return pos.filter((p) => yearOf(p.poDate) === year);
+}
+
+/** Active orders only — used for pipeline KPIs (open / shipped / arrived). */
+export function dashboardActiveYearOrders(pos: PurchaseOrder[], year: number): PurchaseOrder[] {
+  return dashboardYearOrders(pos, year).filter((p) => p.active !== false);
+}
+
+export function computeDashboard(pos: PurchaseOrder[], ref: ReferenceData, year: number): DashboardReport {
+  const inYear = dashboardYearOrders(pos, year);
+  const active = dashboardActiveYearOrders(pos, year);
   const locations = ref.stockingLocations.map((l) => l.name);
   const countBy = (pred: (o: PurchaseOrder) => boolean) => locations.map((loc) => active.filter((o) => o.stockingLocation === loc && pred(o)).length);
 
@@ -127,13 +151,23 @@ export function computeDashboard(pos: PurchaseOrder[], ref: ReferenceData): Dash
 
   const cycle = [
     {
-      title: "Purchase Order → Proforma Invoice",
+      title: "Purchase Order → PI Generated",
       avgDays: cyc("poDate", "piDate"),
       metrics: [{ label: "POs without PIs", value: String(active.filter((o) => !has(o.piNo)).length) }],
     },
     {
-      title: "Proforma Invoice → Downpayment",
-      avgDays: cyc("piDate", "dpDate"),
+      title: "PI Generated → PI Approved",
+      avgDays: cyc("piDate", "piApprovedDate"),
+      metrics: [
+        {
+          label: "PIs pending approval",
+          value: String(active.filter((o) => o.status === "PI Generated").length),
+        },
+      ],
+    },
+    {
+      title: "PI Approved → Downpayment",
+      avgDays: cyc("piApprovedDate", "dpDate"),
       metrics: [
         { label: "Unpaid PIs", value: String(active.filter((o) => has(o.piNo) && !has(o.dpDate)).length) },
         { label: "Unpaid Value", value: money(sumValue((o) => has(o.piNo) && !has(o.dpDate), "piValue")) },
@@ -164,9 +198,9 @@ export function computeDashboard(pos: PurchaseOrder[], ref: ReferenceData): Dash
       openOrders: summaryRows[0].total,
       shipped: summaryRows[1].total,
       arrived: summaryRows[2].total,
-      activeCount: active.length,
-      totalValue: active.reduce((s, o) => s + (Number(o.poValue) || 0), 0),
-      totalM2: active.reduce((s, o) => s + (Number(o.totalM2) || 0), 0),
+      activeCount: inYear.length,
+      totalValue: inYear.reduce((s, o) => s + (Number(o.poValue) || 0), 0),
+      totalM2: inYear.reduce((s, o) => s + (Number(o.totalM2) || 0), 0),
     },
     locations,
     statusRows,
@@ -238,8 +272,8 @@ export interface StatusSlice {
   count: number;
 }
 
-export function statusMix(pos: PurchaseOrder[]): StatusSlice[] {
-  const active = pos.filter((p) => p.active !== false);
+export function statusMix(pos: PurchaseOrder[], year: number): StatusSlice[] {
+  const active = dashboardActiveYearOrders(pos, year);
   return PIPELINE_STAGES.map((status) => ({
     status,
     count: active.filter((o) => o.status === status).length,
@@ -259,11 +293,6 @@ export interface MonthMetric {
   paid: number;
 }
 
-const yearOf = (s?: string | null): number | null => {
-  if (!s) return null;
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d.getFullYear();
-};
 const monthOf = (s?: string | null): number | null => {
   if (!s) return null;
   const d = new Date(s);
@@ -286,12 +315,10 @@ export function computeMonthly(pos: PurchaseOrder[], year: number): MonthMetric[
     month: m, revenue: 0, m2: 0, containers: 0, m2Shipped: 0, orders: 0, paid: 0,
   }));
   for (const p of pos.filter((o) => o.active !== false)) {
-    // Revenue + invoiced M²: prefer CI date/value, fallback to PO date/value.
-    const invDate = p.ciDate || p.poDate;
-    const invValue = Number(p.ciValue) || Number(p.poValue) || 0;
-    if (yearOf(invDate) === year) {
-      const mi = monthOf(invDate)!;
-      months[mi].revenue += invValue;
+    // Revenue + invoiced M²: CI date and CI value only (no PO fallback).
+    if (has(p.ciDate) && yearOf(p.ciDate) === year) {
+      const mi = monthOf(p.ciDate)!;
+      months[mi].revenue += Number(p.ciValue) || 0;
       months[mi].m2 += Number(p.totalM2) || 0;
       months[mi].orders += 1;
     }

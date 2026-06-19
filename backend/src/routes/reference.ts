@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma, requireAuth, requirePage, requireWrite } from "../middleware/auth.js";
+import { canAccessPage } from "../constants.js";
+import type { NextFunction, Request, Response } from "express";
 
 const router = Router();
 
@@ -17,9 +19,13 @@ const strField = z.preprocess(
   (v) => (v === "" || v === undefined ? null : v),
   z.string().nullable(),
 ).optional();
+const emailField = z.preprocess(
+  (v) => (v === "" || v === null || v === undefined ? null : typeof v === "string" ? v.trim() : v),
+  z.union([z.string().email(), z.null()]),
+).optional();
 
-// Shared reference / master data (global, not per-company).
-router.get("/", requireAuth, requirePage("master"), async (_req, res) => {
+// Read-only reference data — any authenticated user (needed by orders, dashboard, items).
+router.get("/", requireAuth, async (_req, res) => {
   const [stages, ports, stockingLocations, shippingLines, colors, products, config] =
     await Promise.all([
       prisma.processStage.findMany({ orderBy: { order: "asc" } }),
@@ -46,7 +52,17 @@ const configSchema = z.object({
   leadTimeNonStandard: z.coerce.number().int().min(0).optional(),
 });
 
-router.patch("/config", requireAuth, requirePage("dashboard"), requireWrite, async (req, res) => {
+function requireMasterOrDashboard(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+  const { role, accessLevel, restrictedPages } = req.user;
+  const ok =
+    canAccessPage(role, accessLevel, restrictedPages, "master") ||
+    canAccessPage(role, accessLevel, restrictedPages, "dashboard");
+  if (!ok) return res.status(403).json({ error: "Forbidden" });
+  next();
+}
+
+router.patch("/config", requireAuth, requireMasterOrDashboard, requireWrite, async (req, res) => {
   const parsed = configSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const config = await prisma.appConfig.upsert({
@@ -127,6 +143,7 @@ const colorSchema = z.object({
 const locationSchema = z.object({
   name: z.string().min(1),
   arrivalPort: strField,
+  email: emailField,
 });
 
 const portSchema = z.object({

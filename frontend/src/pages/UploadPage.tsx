@@ -3,9 +3,16 @@ import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
+import { useCompany } from "../CompanyContext";
 import { PO_SECTIONS, LINE_COLS } from "../poFields";
 import type { ReferenceData } from "../types";
-import { fmtMoney, fmtNum } from "../utils";
+import {
+  clearUploadDraft,
+  draftHasContent,
+  loadUploadDraft,
+  saveUploadDraft,
+} from "../uploadDraft";
+import { fmtMoney, fmtNum, todayISO } from "../utils";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -16,12 +23,29 @@ type LineForm = Record<string, string>;
 type Product = ReferenceData["products"][number];
 type DuplicatePo = { id: number; poNo: string; rev: number; status?: string | null };
 
+// Header fields computed automatically on upload — shown read-only to cut manual entry.
+const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "totalM2", "skids", "status"]);
+
 const toStr = (v: unknown) => (v == null ? "" : String(v));
+
+function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number | null {
+  if (sheets == null || sheetsPerSkid <= 0) return null;
+  return Math.ceil(sheets / sheetsPerSkid);
+}
+
+function summarizeLines(lines: LineForm[]) {
+  const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
+  const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
+  return { poValue, totalM2, skids };
+}
 
 function blankForm(): Record<string, string> {
   const f: Record<string, string> = {};
   for (const sec of PO_SECTIONS) for (const fld of sec.fields) if (fld.type !== "bool") f[fld.k as string] = "";
   f.status = "PO Received";
+  f.rev = "0";
+  f.poDate = todayISO();
   f.notes = "";
   return f;
 }
@@ -34,9 +58,10 @@ function lineToForm(l: Record<string, unknown>): LineForm {
 
 export default function UploadPage() {
   const { canEdit } = useAuth();
+  const { company } = useCompany();
   const navigate = useNavigate();
   const [ref, setRef] = useState<ReferenceData | null>(null);
-  const [form, setForm] = useState<Record<string, string>>(blankForm());
+  const [form, setForm] = useState<Record<string, string>>(blankForm);
   const [active, setActive] = useState(true);
   const [lines, setLines] = useState<LineForm[]>([]);
   const [status, setStatus] = useState("");
@@ -44,10 +69,87 @@ export default function UploadPage() {
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
 
+  // Restore draft or fresh SI No. when the page (or company) loads.
   useEffect(() => {
-    api.getReference().then(setRef);
-  }, []);
+    let cancelled = false;
+    setHydrated(false);
+    setDraftRestored(false);
+
+    const draft = loadUploadDraft(company);
+    const hasDraft = draft && draftHasContent(draft);
+
+    if (hasDraft && draft) {
+      setForm(draft.form);
+      setLines(draft.lines);
+      setActive(draft.active);
+      setPasteText(draft.pasteText);
+      setStatus(draft.status || "Restored your unsaved upload draft.");
+      setDraftRestored(true);
+    } else {
+      setForm(blankForm());
+      setLines([]);
+      setActive(true);
+      setPasteText("");
+      setStatus("");
+    }
+
+    Promise.all([api.getReference(), api.getUploadMeta()]).then(([r, meta]) => {
+      if (cancelled) return;
+      setRef(r);
+      if (!hasDraft) {
+        setForm((f) => ({
+          ...f,
+          siNo: String(meta.nextSiNo),
+          poDate: f.poDate || todayISO(),
+        }));
+      }
+      setHydrated(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [company]);
+
+  // Persist draft while navigating away or refreshing (same browser tab).
+  useEffect(() => {
+    if (!hydrated) return;
+    const snapshot = { form, lines, pasteText };
+    if (!draftHasContent(snapshot)) {
+      clearUploadDraft(company);
+      return;
+    }
+    saveUploadDraft(company, {
+      form,
+      lines,
+      active,
+      pasteText,
+      status,
+      savedAt: new Date().toISOString(),
+    });
+  }, [form, lines, active, pasteText, status, company, hydrated]);
+
+  const discardDraft = async () => {
+    clearUploadDraft(company);
+    setDraftRestored(false);
+    setForm(blankForm());
+    setLines([]);
+    setActive(true);
+    setPasteText("");
+    setStatus("");
+    setDuplicate(null);
+    const meta = await api.getUploadMeta();
+    setForm({
+      ...blankForm(),
+      siNo: String(meta.nextSiNo),
+      poDate: todayISO(),
+    });
+  };
+
+  const sheetsPerSkid = ref?.config?.sheetsPerSkid ?? 200;
 
   const productMap = useMemo(() => {
     const m = new Map<string, Product>();
@@ -55,12 +157,21 @@ export default function UploadPage() {
     return m;
   }, [ref]);
 
-  const totals = useMemo(() => {
-    const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
-    const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
-    const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
-    return { poValue, totalM2, skids };
-  }, [lines]);
+  const totals = useMemo(() => summarizeLines(lines), [lines]);
+
+  // Keep derived header fields in sync with PO #, rev, and line totals.
+  useEffect(() => {
+    const rev = Math.round(Number(form.rev || 0)) || 0;
+    const poNo = form.poNo.trim();
+    setForm((f) => ({
+      ...f,
+      concat: poNo ? `${poNo}-${rev}` : "",
+      poValue: totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
+      totalM2: totals.totalM2 ? String(Math.round(totals.totalM2 * 1000) / 1000) : "",
+      skids: totals.skids ? String(totals.skids) : "",
+      status: "PO Received",
+    }));
+  }, [form.poNo, form.rev, totals.poValue, totals.totalM2, totals.skids]);
 
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {
@@ -107,11 +218,13 @@ export default function UploadPage() {
     let extPo: number | null = null;
     if (sheets != null && pps != null) extPo = sheets * pps;
     else if (qtyM2 != null && ppm2 != null) extPo = qtyM2 * ppm2;
+    const skids = skidsFromSheets(sheets, sheetsPerSkid);
     return {
       ...row,
       qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : row.qtyM2,
       qtyMsf: qtyMsf != null ? String(Math.round(qtyMsf * 1000) / 1000) : row.qtyMsf,
       extPo: extPo != null ? String(Math.round(extPo * 100) / 100) : row.extPo,
+      skids: skids != null ? String(skids) : row.skids,
     };
   };
 
@@ -159,17 +272,24 @@ export default function UploadPage() {
   const removeLine = (i: number) => setLines((prev) => prev.filter((_, idx) => idx !== i));
 
   const applyGuess = (g: Record<string, unknown>) => {
+    const gLines = (g.lines as Record<string, unknown>[]) || [];
+    const computed = summarizeLines(gLines.map(lineToForm));
     setForm((f) => ({
       ...f,
       poNo: toStr(g.poNo) || f.poNo,
-      poDate: toStr(g.poDate) || f.poDate,
+      rev: g.rev != null ? toStr(g.rev) : f.rev,
+      poDate: toStr(g.poDate) || f.poDate || todayISO(),
       stockingLocation: toStr(g.stockingLocation) || f.stockingLocation,
       portOfDest: toStr(g.portOfDest) || f.portOfDest,
+      concat: toStr(g.concat) || f.concat,
+      poValue: g.poValue != null ? toStr(g.poValue) : (computed.poValue ? String(computed.poValue) : f.poValue),
+      totalM2: g.totalM2 != null ? toStr(g.totalM2) : (computed.totalM2 ? String(computed.totalM2) : f.totalM2),
+      skids: g.skids != null ? toStr(g.skids) : (computed.skids ? String(computed.skids) : f.skids),
+      status: "PO Received",
     }));
-    const gLines = (g.lines as Record<string, unknown>[]) || [];
     setLines(gLines.map(lineToForm));
     const matched = Number(g.matchedCount) || 0;
-    setStatus(`Decoded ${gLines.length} line(s)${matched ? `, ${matched} matched to catalog` : ""}.`);
+    setStatus(`Decoded ${gLines.length} line(s)${matched ? `, ${matched} matched to catalog` : ""}. Totals and SI No. filled automatically — review below.`);
   };
 
   const extractPdfText = async (file: File): Promise<string> => {
@@ -247,6 +367,7 @@ export default function UploadPage() {
       if (!form.skids) payload.skids = totals.skids || null;
       payload.lines = lines.map((l, idx) => ({ ...l, lineNo: l.lineNo || String(idx + 1) }));
       await api.createOrder(payload);
+      clearUploadDraft(company);
       navigate("/orders");
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to create PO");
@@ -258,13 +379,15 @@ export default function UploadPage() {
   if (!canEdit()) {
     return (
       <div className="bg-white rounded-lg border border-slate-200 p-10 text-center">
-        <div className="text-lg font-semibold mb-1">Uploading is restricted</div>
-        <div className="text-sm text-slate-500">Your account has read-only access.</div>
+        <div className="text-lg font-semibold mb-1">Maintainer access required</div>
+        <div className="text-sm text-slate-500">Only Maintainers can upload and create new POs.</div>
       </div>
     );
   }
 
   const renderField = (k: string, type?: string, options?: string[]) => {
+    const readOnly = AUTO_FIELDS.has(k);
+    const readOnlyCls = "w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-600";
     if (k === "active") {
       return (
         <select value={active ? "Yes" : "No"} onChange={(e) => setActive(e.target.value === "Yes")} className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm">
@@ -275,9 +398,13 @@ export default function UploadPage() {
     }
     if (k === "status") {
       return (
-        <select value={form.status} onChange={(e) => setField("status", e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm">
-          {(options ?? []).map((o) => <option key={o}>{o}</option>)}
-        </select>
+        <input
+          type="text"
+          readOnly
+          value={form.status}
+          className={readOnlyCls}
+          title="New uploads always start at PO Received"
+        />
       );
     }
     if (k === "stockingLocation") {
@@ -303,6 +430,17 @@ export default function UploadPage() {
         </select>
       );
     }
+    if (readOnly) {
+      return (
+        <input
+          type="text"
+          readOnly
+          value={form[k] ?? ""}
+          className={readOnlyCls}
+          title="Auto-filled"
+        />
+      );
+    }
     return (
       <input
         type={type === "number" ? "number" : type === "date" ? "date" : "text"}
@@ -318,8 +456,20 @@ export default function UploadPage() {
       <div className="bg-white rounded-lg border border-slate-200 p-5">
         <div className="font-semibold mb-1">Upload a Purchase Order</div>
         <div className="text-sm text-slate-500 mb-4">
-          Drop a PO (PDF). Typed PDFs are read directly; scanned/image PDFs are run through OCR. Recognized part numbers are auto-filled from the catalog. Review and edit below, then save.
+          Drop a PO (PDF). Typed PDFs are read directly; scanned/image PDFs are run through OCR. Recognized part numbers are auto-filled from the catalog — SI No., totals, skids, and concat are computed for you. Your work is kept as a draft if you switch pages before saving.
         </div>
+        {draftRestored && (
+          <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 flex flex-wrap items-center gap-2">
+            <span>Unsaved upload draft restored — you can continue editing.</span>
+            <button
+              type="button"
+              onClick={() => void discardDraft()}
+              className="text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-100"
+            >
+              Discard draft
+            </button>
+          </div>
+        )}
         <div className="flex flex-col md:flex-row gap-4">
           <label className="flex-1 block border-2 border-dashed border-slate-300 rounded-lg p-8 text-center text-slate-500 hover:bg-slate-50 cursor-pointer">
             <div className="text-3xl mb-2">⬆</div>
@@ -360,8 +510,9 @@ export default function UploadPage() {
       <div className="bg-white rounded-lg border border-slate-200 p-5">
         <div className="flex items-center gap-3 mb-4">
           <div className="font-semibold">Purchase Order details</div>
-          <div className="ml-auto text-xs text-slate-500">
-            {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · {fmtMoney(totals.poValue)} · {totals.skids || 0} skids
+          <div className="ml-auto text-xs text-slate-500 text-right">
+            <div>SI #{form.siNo || "—"} · {form.concat || "—"}</div>
+            <div>{lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · {fmtMoney(totals.poValue)} · {totals.skids || 0} skids</div>
           </div>
         </div>
 
@@ -371,7 +522,10 @@ export default function UploadPage() {
             <div className="p-3 grid grid-cols-2 md:grid-cols-3 gap-3">
               {sec.fields.map((fld) => (
                 <div key={fld.k as string}>
-                  <label className="text-[11px] text-slate-500 block mb-0.5">{fld.label}</label>
+                  <label className="text-[11px] text-slate-500 block mb-0.5">
+                    {fld.label}
+                    {AUTO_FIELDS.has(fld.k as string) ? <span className="text-slate-400"> (auto)</span> : null}
+                  </label>
                   {renderField(fld.k as string, fld.type, fld.options)}
                 </div>
               ))}
@@ -420,6 +574,16 @@ export default function UploadPage() {
         </div>
 
         <div className="flex justify-end gap-2 mt-4">
+          {(draftHasContent({ form, lines, pasteText }) || draftRestored) && (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void discardDraft()}
+              className="px-4 py-2 text-sm rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Discard draft
+            </button>
+          )}
           <button type="button" disabled={saving || !!duplicate} onClick={save} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-50">
             {duplicate ? "PO already exists" : saving ? "Saving…" : "Save PO to tracker"}
           </button>

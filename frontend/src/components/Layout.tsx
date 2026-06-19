@@ -6,6 +6,11 @@ import { api } from "../api";
 import { downloadBlob } from "../utils";
 import type { Company } from "../companies";
 import { NavIcon } from "./NavIcons";
+import { usePendingPiApprovals } from "../hooks/usePendingPiApprovals";
+import { usePendingCiApprovals } from "../hooks/usePendingCiApprovals";
+import { isManagerRole, isFinanceRole } from "../piApproval";
+import PiApprovalNotice from "./PiApprovalNotice";
+import CiApprovalNotice from "./CiApprovalNotice";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", shortLabel: "Dashboard", page: "dashboard" },
@@ -33,6 +38,11 @@ export default function Layout() {
   const currentPage = navItems.find((n) => location.pathname.startsWith(n.to));
   const moreNavItems = navItems.slice(4);
   const isMoreActive = moreNavItems.some((n) => location.pathname.startsWith(n.to));
+  const isManager = isManagerRole(user?.role);
+  const isFinance = isFinanceRole(user?.role);
+  const { pending: pendingPi, count: pendingPiCount } = usePendingPiApprovals(isManager);
+  const { pending: pendingCi, count: pendingCiCount } = usePendingCiApprovals(isFinance);
+  const pendingApprovalCount = pendingPiCount + pendingCiCount;
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -115,7 +125,12 @@ export default function Layout() {
             {({ isActive }) => (
               <>
                 <NavIcon page={n.page} active={isActive} />
-                <span>{n.label}</span>
+                <span className="flex-1">{n.label}</span>
+                {(isManager || isFinance) && n.page === "orders" && pendingApprovalCount > 0 && (
+                  <span className="ml-auto min-w-[1.25rem] rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white text-center leading-none">
+                    {pendingApprovalCount}
+                  </span>
+                )}
               </>
             )}
           </NavLink>
@@ -218,12 +233,19 @@ export default function Layout() {
               >
                 {({ isActive }) => (
                   <>
-                    <NavIcon
-                      page={n.page}
-                      active={isActive}
-                      size={20}
-                      className="mobile-tab-icon"
-                    />
+                    <span className="relative">
+                      <NavIcon
+                        page={n.page}
+                        active={isActive}
+                        size={20}
+                        className="mobile-tab-icon"
+                      />
+                      {(isManager || isFinance) && n.page === "orders" && pendingApprovalCount > 0 && (
+                        <span className="absolute -top-1 -right-1 min-w-[0.875rem] h-3.5 rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white flex items-center justify-center leading-none">
+                          {pendingApprovalCount > 9 ? "9+" : pendingApprovalCount}
+                        </span>
+                      )}
+                    </span>
                     <span className="mobile-tab-label">{n.shortLabel}</span>
                   </>
                 )}
@@ -242,6 +264,17 @@ export default function Layout() {
         )}
 
         <main className="app-content">
+          {((isManager && pendingPiCount > 0) || (isFinance && pendingCiCount > 0)) &&
+          location.pathname !== "/orders" ? (
+            <div className="space-y-3">
+              {isManager && pendingPiCount > 0 && (
+                <PiApprovalNotice pending={pendingPi} />
+              )}
+              {isFinance && pendingCiCount > 0 && (
+                <CiApprovalNotice pending={pendingCi} />
+              )}
+            </div>
+          ) : null}
           <Outlet key={company} />
         </main>
       </div>

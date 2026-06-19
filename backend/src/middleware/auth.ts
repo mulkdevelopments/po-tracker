@@ -4,6 +4,7 @@ import { PrismaClient, User } from "@prisma/client";
 import {
   canAccessPage,
   canWrite,
+  canEditPo,
   canAdvanceStage,
   canManageUsers,
   type Page,
@@ -89,7 +90,24 @@ export function requirePage(page: Page) {
 export function requireWrite(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: "Authentication required" });
   if (!canWrite(req.user.role, req.user.accessLevel)) {
-    return res.status(403).json({ error: "Read-only access" });
+    return res.status(403).json({ error: "Maintainer access required" });
+  }
+  next();
+}
+
+export function requirePoEdit(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) return res.status(401).json({ error: "Authentication required" });
+  if (!canEditPo(req.user.role)) {
+    return res.status(403).json({ error: "Maintainer access required to edit POs" });
+  }
+  next();
+}
+
+export function requireStageAdvance(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) return res.status(401).json({ error: "Authentication required" });
+  const nextStage = String(req.body?.nextStage ?? "");
+  if (!nextStage || !canAdvanceStage(req.user.role, nextStage)) {
+    return res.status(403).json({ error: `Cannot advance to ${nextStage || "stage"}` });
   }
   next();
 }
@@ -100,14 +118,4 @@ export function requireSuperAdmin(req: Request, res: Response, next: NextFunctio
     return res.status(403).json({ error: "Super admin access required" });
   }
   next();
-}
-
-export function requireStageAdvance(stage: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ error: "Authentication required" });
-    if (!canAdvanceStage(req.user.role, stage)) {
-      return res.status(403).json({ error: `Cannot advance to ${stage}` });
-    }
-    next();
-  };
 }

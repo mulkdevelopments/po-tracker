@@ -9,11 +9,11 @@ datasource db {
 
 enum UserRole {
   SUPER_ADMIN
-  HQ_SALES
-  UAE_JEBEL_ALI
-  UAE_SHARJAH
-  UAE_ABU_DHABI
+  MAINTAINER
+  MANAGER
+  FINANCE
   LOGISTICS
+  SUPERVISOR
   VIEWER
 }
 
@@ -33,7 +33,7 @@ model User {
   name            String
   email           String      @unique
   passwordHash    String
-  role            UserRole    @default(VIEWER)
+  role            UserRole    @default(MANAGER)
   accessLevel     AccessLevel @default(READ_ONLY)
   restrictedPages String[]    @default([])
   isActive        Boolean     @default(true)
@@ -67,6 +67,9 @@ model PurchaseOrder {
   piDate            String?
   poToPi            Int?
   piValue           Float?
+  piApprovedDate    String?
+  piResubmitCount   Int         @default(0)
+  piRejectedNote    String?
   dpDate            String?
   piToDp            Int?
   dpAmount          Float?
@@ -80,6 +83,9 @@ model PurchaseOrder {
   dpToShip          Int?
   ciNo              String?
   ciDate            String?
+  ciApprovedDate    String?
+  ciResubmitCount   Int         @default(0)
+  ciRejectedNote    String?
   revisionSent      String?
   freight           Float?
   inland            Float?
@@ -101,6 +107,7 @@ model PurchaseOrder {
   piSent               String?
   productionStatus     String?
   productionNotes      String?
+  stockingEmailSentAt  String?
   lines             PoLine[]
   history           PoHistory[]
   createdAt         DateTime    @default(now())
@@ -130,8 +137,12 @@ model PoLine {
   unitM2     Float?
   extPo      Float?
   extInv     Float?
-  leadTime   Int?
-  notes      String?
+  leadTime        Int?
+  notes           String?
+  actualQtyM2     Float?
+  actualSheets    Float?
+  actualSkids     Float?
+  actualNotes     String?
 }
 
 // ---------- Shared reference / master data (global, not per-company) ----------
@@ -154,6 +165,7 @@ model StockingLocation {
   id          Int     @id @default(autoincrement())
   name        String  @unique
   arrivalPort String?
+  email       String?
 }
 
 model ShippingLine {

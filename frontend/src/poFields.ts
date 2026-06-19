@@ -31,13 +31,17 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     ],
   },
   {
-    title: "Proforma Invoice",
+    title: "PI Generated",
     fields: [
-      { k: "piNo", label: "Proforma Invoice #" },
-      { k: "piDate", label: "Proforma Invoice Date", type: "date" },
+      { k: "piNo", label: "PI #" },
+      { k: "piDate", label: "PI Date", type: "date" },
       { k: "poToPi", label: "PO to PI", type: "number" },
-      { k: "piValue", label: "Proforma Invoice Value (Gross)", type: "number" },
+      { k: "piValue", label: "PI Value (Gross)", type: "number" },
     ],
+  },
+  {
+    title: "PI Approved",
+    fields: [{ k: "piApprovedDate", label: "PI Approved Date", type: "date" }],
   },
   {
     title: "Downpayment / In Production",
@@ -47,23 +51,28 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "dpAmount", label: "Downpayment Amount Received", type: "number" },
       { k: "productionStart", label: "Production Start", type: "date" },
       { k: "productionEtc", label: "Production ETC (in Container)", type: "date" },
-      { k: "shippingEta", label: "Shipping ETA", type: "date" },
+    ],
+  },
+  {
+    title: "Production Complete",
+    fields: [
+      { k: "productionComplete", label: "Production Complete Date", type: "date" },
+      { k: "productionStatus", label: "Production Status" },
+      { k: "productionNotes", label: "Quality / Defect Notes" },
     ],
   },
   {
     title: "Container Loaded",
     fields: [
-      { k: "bol", label: "BOL / SWBOL" },
-      { k: "isf", label: "ISF" },
       { k: "containerNo", label: "Container #" },
-      { k: "shippingLine", label: "Shipping Line" },
-      { k: "shippingUrl", label: "URL", type: "url" },
-      { k: "actualDeparture", label: "Actual Shipping Departure", type: "date" },
+      { k: "actualDeparture", label: "ETD", type: "date" },
+      { k: "shippingEta", label: "ETA", type: "date" },
+      { k: "isf", label: "ISF" },
       { k: "dpToShip", label: "DP to Ship", type: "number" },
     ],
   },
   {
-    title: "Commercial Invoice",
+    title: "CI sent",
     fields: [
       { k: "ciNo", label: "Commercial Invoice #" },
       { k: "ciDate", label: "Commercial Invoice Date", type: "date" },
@@ -72,6 +81,18 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "inland", label: "Inland", type: "number" },
       { k: "ciValue", label: "Commercial Invoice Value (Net)", type: "number" },
       { k: "balanceDue", label: "Balance Due", type: "number" },
+    ],
+  },
+  {
+    title: "CI approved",
+    fields: [{ k: "ciApprovedDate", label: "CI Approved Date", type: "date" }],
+  },
+  {
+    title: "BL",
+    fields: [
+      { k: "bol", label: "BOL / SWBOL" },
+      { k: "shippingLine", label: "Shipping Line" },
+      { k: "shippingUrl", label: "Tracking URL", type: "url" },
     ],
   },
   {

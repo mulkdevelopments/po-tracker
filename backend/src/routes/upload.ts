@@ -47,8 +47,41 @@ type ProductRow = {
   leadTimeDays: number | null;
 };
 
+function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number | null {
+  if (sheets == null || sheetsPerSkid <= 0) return null;
+  return Math.ceil(sheets / sheetsPerSkid);
+}
+
+// UFP POs often print "3 pkgs @ 200 pcs/pkg = 600 pcs" — avoid grabbing the per-pkg size.
+function parseLineQty(ctx: string, sheetsPerSkid: number): { sheets: number | null; skids: number | null } {
+  const total = ctx.match(/=\s*(\d{2,5})\s*(?:PCS?|SHEETS?|EA|PIECES)\b/i);
+  if (total?.[1]) {
+    const sheets = Number(total[1]);
+    return { sheets, skids: skidsFromSheets(sheets, sheetsPerSkid) };
+  }
+  const pkgs = ctx.match(/(\d+)\s*pkgs?\s*@/i);
+  const perPkg = ctx.match(/@\s*(\d{2,5})\s*(?:PCS?|SHEETS?)\s*\/\s*pkg/i);
+  if (pkgs?.[1]) {
+    const skidCount = Number(pkgs[1]);
+    const per = perPkg?.[1] ? Number(perPkg[1]) : sheetsPerSkid;
+    return { sheets: skidCount * per, skids: skidCount };
+  }
+  const loose = ctx.match(/(\d{2,5})\s*(?:SHEETS?|PCS?|EA|PIECES)\b(?!\s*\/\s*pkg)/i);
+  if (loose?.[1]) {
+    const sheets = Number(loose[1]);
+    return { sheets, skids: skidsFromSheets(sheets, sheetsPerSkid) };
+  }
+  return { sheets: null, skids: null };
+}
+
 // Build a fully-populated line from a catalog product + a sheet count.
-function lineFromProduct(p: ProductRow, lineNo: number, sheets: number | null) {
+function lineFromProduct(
+  p: ProductRow,
+  lineNo: number,
+  sheets: number | null,
+  sheetsPerSkid: number,
+  skidsOverride?: number | null,
+) {
   const m2PerSheet = p.widthMm && p.lengthMm ? (p.widthMm * p.lengthMm) / 1_000_000 : null;
   const sqftPerSheet = p.widthIn && p.lengthIn ? (p.widthIn * p.lengthIn) / 144 : null;
   const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
@@ -70,7 +103,7 @@ function lineFromProduct(p: ProductRow, lineNo: number, sheets: number | null) {
     qtyMsf,
     qtyM2,
     sheets,
-    skids: null as number | null,
+    skids: skidsOverride ?? skidsFromSheets(sheets, sheetsPerSkid),
     unitMsf: p.pricePerMsq,
     unitM2: p.pricePerM2,
     extPo,
@@ -83,6 +116,14 @@ interface Ref {
   products: ProductRow[];
   colorNames: string[];
   locations: { name: string; arrivalPort: string | null }[];
+  sheetsPerSkid: number;
+}
+
+function summarizeLines(lines: Record<string, unknown>[]) {
+  const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
+  const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
+  return { poValue: poValue || null, totalM2: totalM2 || null, skids: skids || null };
 }
 
 function guessFields(text: string, ref: Ref) {
@@ -108,6 +149,13 @@ function guessFields(text: string, ref: Ref) {
       /\b(5\d{7})\b/,
       /\b(2\d{7})\b/,
     ]),
+    rev: (() => {
+      const m = clean.match(/(?:Rev(?:ision)?|Rev\.?)\s*[:#-]?\s*(\d+)/i);
+      if (m?.[1]) return Number(m[1]) || 0;
+      const m2 = clean.match(/\b\d{6,}\s*rev\s*(\d+)/i);
+      if (m2?.[1]) return Number(m2[1]) || 0;
+      return 0;
+    })(),
     poDate: pickDate(clean, [
       /(?:PO|Order|Date)\s*(?:Date)?\s*[:#-]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i,
       /(?:PO|Order|Date)\s*(?:Date)?\s*[:#-]?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/,
@@ -129,9 +177,8 @@ function guessFields(text: string, ref: Ref) {
     if (!product) continue;
     seen.add(partNo);
     const ctx = clean.slice(m.index, Math.min(clean.length, m.index + 220));
-    const qty = (ctx.match(/(\d{2,5})\s*(?:SHEETS?|PCS?|EA|PIECES)/i) || [])[1];
-    const sheets = qty ? Number(qty) : null;
-    lines.push(lineFromProduct(product, ++idx, sheets));
+    const { sheets, skids } = parseLineQty(ctx, ref.sheetsPerSkid);
+    lines.push(lineFromProduct(product, ++idx, sheets, ref.sheetsPerSkid, skids));
   }
 
   // Fallback: if no catalog parts matched, do best-effort size/color extraction.
@@ -159,20 +206,26 @@ function guessFields(text: string, ref: Ref) {
 
   out.lines = lines;
   out.matchedCount = lines.filter((l) => l.matched).length;
+  const poNo = String(out.poNo ?? "").trim();
+  const rev = Number(out.rev) || 0;
+  if (poNo) out.concat = `${poNo}-${rev}`;
+  Object.assign(out, summarizeLines(lines));
   return out;
 }
 
 async function loadRef(company: ReturnType<typeof parseCompany>): Promise<Ref> {
   void company; // reference data is shared across companies
-  const [products, colors, locations] = await Promise.all([
+  const [products, colors, locations, config] = await Promise.all([
     prisma.product.findMany(),
     prisma.color.findMany(),
     prisma.stockingLocation.findMany(),
+    prisma.appConfig.findUnique({ where: { id: 1 } }),
   ]);
   return {
     products: products as ProductRow[],
     colorNames: colors.map((c) => c.name).filter((n): n is string => !!n),
     locations: locations.map((l) => ({ name: l.name, arrivalPort: l.arrivalPort })),
+    sheetsPerSkid: config?.sheetsPerSkid ?? 200,
   };
 }
 
@@ -206,7 +259,9 @@ router.post("/decode-text", requireAuth, requirePage("upload"), async (req, res)
 router.get("/product/:partNo", requireAuth, requirePage("upload"), async (req, res) => {
   const product = await prisma.product.findUnique({ where: { partNo: String(req.params.partNo) } });
   if (!product) return res.status(404).json({ error: "Not found" });
-  res.json({ line: lineFromProduct(product as ProductRow, 1, null), product });
+  const config = await prisma.appConfig.findUnique({ where: { id: 1 } });
+  const sheetsPerSkid = config?.sheetsPerSkid ?? 200;
+  res.json({ line: lineFromProduct(product as ProductRow, 1, null, sheetsPerSkid), product });
 });
 
 export default router;

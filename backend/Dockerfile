@@ -14,5 +14,6 @@ COPY package*.json ./
 COPY prisma ./prisma/
 RUN npm ci --omit=dev && npx prisma generate
 COPY --from=builder /app/dist ./dist
+COPY assets ./assets
 EXPOSE 4000
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/seed.js && node dist/index.js"]

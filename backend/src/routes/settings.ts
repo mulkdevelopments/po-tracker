@@ -16,7 +16,7 @@ async function getOrCreateSettings(company: ReturnType<typeof parseCompany>) {
   return settings;
 }
 
-router.get("/", requireAuth, requirePage("master"), async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const company = parseCompany(req.query.company);
   const settings = await getOrCreateSettings(company);
   res.json({ master: settings.master, pricing: settings.pricing, company });

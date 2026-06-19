@@ -23,7 +23,22 @@ export function daysBetween(a?: string | null, b?: string | null): number | "" {
 }
 
 export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Add calendar weeks to an ISO date (YYYY-MM-DD). */
+export function addWeeksISO(iso: string, weeks: number): string {
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  if (isNaN(d.getTime())) return iso;
+  d.setDate(d.getDate() + weeks * 7);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export function stageIndex(s: string, stages: readonly string[]): number {
@@ -42,4 +57,9 @@ export function downloadBlob(blob: Blob, name: string) {
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** Basic email format check (empty is not valid — use only when value is non-empty). */
+export function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }

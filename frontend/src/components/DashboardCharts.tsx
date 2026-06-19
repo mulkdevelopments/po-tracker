@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Link } from "react-router-dom";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -14,7 +14,6 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { api } from "../api";
 import { fmtMoney, fmtNum } from "../utils";
 import {
   computeMonthly,
@@ -32,15 +31,17 @@ const STATUS_PALETTE = [
 
 export function StatusDoughnut({
   data,
+  year,
   onSelect,
 }: {
   data: StatusSlice[];
+  year: number;
   onSelect: (status: string) => void;
 }) {
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-4">
       <div className="font-semibold text-slate-900 mb-1">Status Mix</div>
-      <div className="text-[11px] text-slate-400 mb-2">Click a slice for the PO list</div>
+      <div className="text-[11px] text-slate-400 mb-2">PO date {year} · click a slice for the PO list</div>
       <ResponsiveContainer width="100%" height={240}>
         <PieChart>
           <Pie
@@ -78,8 +79,38 @@ function Tile({ label, value, sub, tone }: { label: string; value: string; sub?:
   );
 }
 
-export function AnnualSalesPanel({ pos, year, onYear }: { pos: PurchaseOrder[]; year: number; onYear: (y: number) => void }) {
+export function DashboardYearFilter({
+  pos,
+  year,
+  onYear,
+}: {
+  pos: PurchaseOrder[];
+  year: number;
+  onYear: (y: number) => void;
+}) {
   const years = availableYears(pos);
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <label htmlFor="dashboard-year" className="text-sm text-slate-600">
+        Year
+      </label>
+      <select
+        id="dashboard-year"
+        value={year}
+        onChange={(e) => onYear(Number(e.target.value))}
+        className="border border-slate-300 rounded-md px-2 py-1.5 text-sm bg-white"
+      >
+        {years.map((y) => (
+          <option key={y} value={y}>
+            {y}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+export function AnnualSalesPanel({ pos, year }: { pos: PurchaseOrder[]; year: number }) {
   const months = computeMonthly(pos, year);
   const totRevenue = months.reduce((s, m) => s + m.revenue, 0);
   const totM2 = months.reduce((s, m) => s + m.m2, 0);
@@ -89,20 +120,9 @@ export function AnnualSalesPanel({ pos, year, onYear }: { pos: PurchaseOrder[]; 
 
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-4">
-      <div className="flex items-center gap-3 mb-3">
-        <div>
-          <div className="font-semibold text-slate-900">Annual Sales — {year}</div>
-          <div className="text-xs text-slate-500">Revenue from Commercial Invoice (fallback to PO value). HQ / Sales view.</div>
-        </div>
-        <select
-          value={year}
-          onChange={(e) => onYear(Number(e.target.value))}
-          className="ml-auto border border-slate-300 rounded-md px-2 py-1.5 text-sm"
-        >
-          {years.map((y) => (
-            <option key={y} value={y}>{y}</option>
-          ))}
-        </select>
+      <div className="mb-3">
+        <div className="font-semibold text-slate-900">Annual Sales — {year}</div>
+        <div className="text-xs text-slate-500">Sum of Commercial Invoice value by CI date. HQ / Sales view.</div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -194,27 +214,18 @@ export function CapacityPanel({
   pos,
   year,
   config,
-  canEdit,
-  onConfigChange,
+  canEditMaster,
 }: {
   pos: PurchaseOrder[];
   year: number;
   config: AppConfigData;
-  canEdit: boolean;
-  onConfigChange: (c: AppConfigData) => void;
+  canEditMaster?: boolean;
 }) {
-  const [draft, setDraft] = useState({
-    productionLines: config.productionLines ?? 2,
-    m2PerLinePerDay: config.m2PerLinePerDay ?? 3000,
-    m2PerContainer: config.m2PerContainer ?? 8300,
-    workingDaysPerMonth: config.workingDaysPerMonth ?? 26,
-  });
-
   const c = {
-    lines: Number(draft.productionLines) || 2,
-    m2PerLinePerDay: Number(draft.m2PerLinePerDay) || 3000,
-    m2PerContainer: Number(draft.m2PerContainer) || 8300,
-    workingDaysPerMonth: Number(draft.workingDaysPerMonth) || 26,
+    lines: Number(config.productionLines) || 2,
+    m2PerLinePerDay: Number(config.m2PerLinePerDay) || 3000,
+    m2PerContainer: Number(config.m2PerContainer) || 8300,
+    workingDaysPerMonth: Number(config.workingDaysPerMonth) || 26,
   };
   const rows = computeCapacity(pos, year, c);
   const totalActual = rows.reduce((s, r) => s + r.containers, 0);
@@ -223,11 +234,6 @@ export function CapacityPanel({
   const m2PerMonth = c.lines * c.m2PerLinePerDay * c.workingDaysPerMonth;
   const containersPerMonth = c.m2PerContainer ? m2PerMonth / c.m2PerContainer : 0;
   const utilTone = ytdUtil >= 85 ? "bg-emerald-50 text-emerald-900" : ytdUtil >= 60 ? "bg-amber-50 text-amber-900" : "bg-red-50 text-red-900";
-
-  const persist = (field: keyof typeof draft, value: number) => {
-    if (!canEdit) return;
-    api.updateConfig({ [field]: value }).then(({ config: c2 }) => onConfigChange(c2)).catch(() => {});
-  };
 
   const chartData = rows.map((r) => ({
     month: r.month,
@@ -247,23 +253,23 @@ export function CapacityPanel({
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4 text-sm">
         {([
-          ["productionLines", "Production lines"],
-          ["m2PerLinePerDay", "m² / line / day"],
-          ["m2PerContainer", "m² / container"],
-          ["workingDaysPerMonth", "Working days / month"],
-        ] as const).map(([k, label]) => (
-          <div key={k}>
-            <label className="text-[11px] text-slate-500">{label}</label>
-            <input
-              type="number"
-              disabled={!canEdit}
-              value={draft[k]}
-              onChange={(e) => setDraft({ ...draft, [k]: Number(e.target.value) })}
-              onBlur={(e) => persist(k, Number(e.target.value))}
-              className="w-full border border-slate-300 rounded-md px-2 py-1 text-sm disabled:bg-slate-50"
-            />
+          ["Production lines", c.lines],
+          ["m² / line / day", fmtNum(c.m2PerLinePerDay, 0)],
+          ["m² / container", fmtNum(c.m2PerContainer, 0)],
+          ["Working days / month", c.workingDaysPerMonth],
+        ] as const).map(([label, value]) => (
+          <div key={label} className="rounded-md bg-slate-50 border border-slate-100 px-2 py-1.5">
+            <div className="text-[11px] text-slate-500">{label}</div>
+            <div className="font-medium text-slate-900">{value}</div>
           </div>
         ))}
+      </div>
+      <div className="text-[11px] text-slate-500 mb-4">
+        {canEditMaster ? (
+          <>Capacity assumptions are configured in <Link to="/master" className="text-indigo-600 hover:underline">Master Data → Production Capacity</Link>.</>
+        ) : (
+          <>Capacity assumptions are configured in Master Data → Production Capacity.</>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">

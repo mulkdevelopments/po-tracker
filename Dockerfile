@@ -21,6 +21,7 @@ COPY backend/package*.json ./
 COPY backend/prisma ./prisma/
 RUN npm ci --omit=dev && npx prisma generate
 COPY --from=backend-build /app/backend/dist ./dist
+COPY backend/assets ./assets
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 EXPOSE 4000
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/seed.js && node dist/index.js"]

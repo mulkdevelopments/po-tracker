@@ -1,8 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import PoDrawer from "../components/PoDrawer";
+import PiApprovalNotice from "../components/PiApprovalNotice";
+import CiApprovalNotice from "../components/CiApprovalNotice";
+import StockingEmailNotice from "../components/StockingEmailNotice";
+import { usePendingPiApprovals } from "../hooks/usePendingPiApprovals";
+import { usePendingCiApprovals } from "../hooks/usePendingCiApprovals";
+import { usePendingStockingEmails } from "../hooks/usePendingStockingEmails";
+import {
+  isManagerRole,
+  isFinanceRole,
+  PI_PENDING_STATUS,
+  PI_REJECTED_STATUS,
+  CI_PENDING_STATUS,
+  CI_REJECTED_STATUS,
+  rejectedPiOrders,
+  rejectedCiOrders,
+  isOperationalAdminRole,
+} from "../piApproval";
+import { notifyPoUpdated } from "../poEvents";
+import { canMarkStockingEmailRole } from "../stockingEmail";
+import ResubmitTag from "../components/ResubmitTag";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, MasterData } from "../types";
 import { fmtMoney, fmtNum, fmtDate } from "../utils";
@@ -31,29 +51,31 @@ const COLUMNS: Col[] = [
   { key: "portOfDest", label: "Port of Destination", type: "text", group: "PO Received" },
   { key: "poValue", label: "PO Value $", type: "money", group: "PO Received" },
   { key: "totalM2", label: "Total M2", type: "num", group: "PO Received" },
-  { key: "piNo", label: "Proforma Invoice #", type: "text", group: "Proforma Invoice Sent" },
-  { key: "piDate", label: "Proforma Invoice Date", type: "date", group: "Proforma Invoice Sent" },
-  { key: "poToPi", label: "PO to PI", type: "int", group: "Proforma Invoice Sent" },
-  { key: "piValue", label: "Proforma Invoice Value (Gross)", type: "money", group: "Proforma Invoice Sent" },
+  { key: "piNo", label: "PI #", type: "text", group: "PI Generated" },
+  { key: "piDate", label: "PI Date", type: "date", group: "PI Generated" },
+  { key: "poToPi", label: "PO to PI", type: "int", group: "PI Generated" },
+  { key: "piValue", label: "PI Value (Gross)", type: "money", group: "PI Generated" },
+  { key: "piApprovedDate", label: "PI Approved Date", type: "date", group: "PI Approved" },
   { key: "dpDate", label: "Downpayment Date", type: "date", group: "Downpayment / In Production" },
   { key: "piToDp", label: "PI to DP", type: "int", group: "Downpayment / In Production" },
   { key: "dpAmount", label: "Downpayment Amount Received", type: "money", group: "Downpayment / In Production" },
   { key: "productionEtc", label: "Production ETC (in Container)", type: "date", group: "Downpayment / In Production" },
   { key: "shippingEta", label: "Shipping ETA", type: "date", group: "Downpayment / In Production" },
-  { key: "bol", label: "BOL / SWBOL", type: "text", group: "Container Loaded" },
   { key: "isf", label: "ISF", type: "text", group: "Container Loaded" },
   { key: "containerNo", label: "Container #", type: "text", group: "Container Loaded" },
-  { key: "shippingLine", label: "Shipping Line", type: "text", group: "Container Loaded" },
-  { key: "shippingUrl", label: "URL", type: "url", group: "Container Loaded" },
   { key: "actualDeparture", label: "Actual Shipping Departure", type: "date", group: "Container Loaded" },
   { key: "dpToShip", label: "DP to Ship", type: "int", group: "Container Loaded" },
-  { key: "ciNo", label: "Commercial Invoice #", type: "text", group: "Commercial Invoice Sent" },
-  { key: "ciDate", label: "Commercial Invoice Date", type: "date", group: "Commercial Invoice Sent" },
-  { key: "revisionSent", label: "Revision Sent?", type: "text", group: "Commercial Invoice Sent" },
-  { key: "freight", label: "Freight", type: "money", group: "Commercial Invoice Sent" },
-  { key: "inland", label: "Inland", type: "money", group: "Commercial Invoice Sent" },
-  { key: "ciValue", label: "Commercial Invoice Value (Net)", type: "money", group: "Commercial Invoice Sent" },
-  { key: "balanceDue", label: "Balance Due", type: "money", group: "Commercial Invoice Sent" },
+  { key: "ciNo", label: "Commercial Invoice #", type: "text", group: "CI sent" },
+  { key: "ciDate", label: "Commercial Invoice Date", type: "date", group: "CI sent" },
+  { key: "revisionSent", label: "Revision Sent?", type: "text", group: "CI sent" },
+  { key: "freight", label: "Freight", type: "money", group: "CI sent" },
+  { key: "inland", label: "Inland", type: "money", group: "CI sent" },
+  { key: "ciValue", label: "Commercial Invoice Value (Net)", type: "money", group: "CI sent" },
+  { key: "balanceDue", label: "Balance Due", type: "money", group: "CI sent" },
+  { key: "ciApprovedDate", label: "CI Approved Date", type: "date", group: "CI approved" },
+  { key: "bol", label: "BOL / SWBOL", type: "text", group: "BL" },
+  { key: "shippingLine", label: "Shipping Line", type: "text", group: "BL" },
+  { key: "shippingUrl", label: "Tracking URL", type: "url", group: "BL" },
   { key: "bpDate", label: "Balance Payment Date", type: "date", group: "Balance Payment Received" },
   { key: "ciToBp", label: "CI to BP", type: "int", group: "Balance Payment Received" },
   { key: "bpAmount", label: "Balance Amount Received", type: "money", group: "Balance Payment Received" },
@@ -88,8 +110,22 @@ interface ColFilter {
 }
 
 export default function OrdersPage() {
-  const { user, canEdit } = useAuth();
+  const { user, canEdit, isSuperAdmin } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isManager = isManagerRole(user?.role);
+  const isFinance = isFinanceRole(user?.role);
+  const isMaintainer = isOperationalAdminRole(user?.role);
+  const showStockingEmailQueue = canMarkStockingEmailRole(user?.role);
+  const { pending: pendingPi, count: pendingPiCount } = usePendingPiApprovals(isManager);
+  const { pending: pendingCi, count: pendingCiCount } = usePendingCiApprovals(isFinance);
+  const {
+    pending: pendingStockingEmail,
+    count: pendingStockingEmailCount,
+  } = usePendingStockingEmails(!!showStockingEmailQueue);
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
+  const rejectedPi = useMemo(() => rejectedPiOrders(pos), [pos]);
+  const rejectedCi = useMemo(() => rejectedCiOrders(pos), [pos]);
   const [master, setMaster] = useState<MasterData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<PurchaseOrder | null>(null);
@@ -97,6 +133,7 @@ export default function OrdersPage() {
   const [filters, setFilters] = useState<Record<string, ColFilter>>({});
   const [openCol, setOpenCol] = useState<string | null>(null);
   const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
+  const [stockingEmailFilterActive, setStockingEmailFilterActive] = useState(false);
 
   const load = async () => {
     const [{ pos: list }, settings] = await Promise.all([api.getOrders(), api.getSettings()]);
@@ -108,6 +145,69 @@ export default function OrdersPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (!pos.length) return;
+    const state = location.state as {
+      openPoId?: number;
+      pendingPi?: boolean;
+      pendingCi?: boolean;
+      pendingStockingEmail?: boolean;
+    } | null;
+    if (!state?.openPoId && !state?.pendingPi && !state?.pendingCi && !state?.pendingStockingEmail) return;
+
+    if (state.pendingPi) {
+      setFilters({ status: { search: "", selected: [PI_PENDING_STATUS] } });
+    }
+    if (state.pendingCi) {
+      setFilters({ status: { search: "", selected: [CI_PENDING_STATUS] } });
+    }
+    if (state.pendingStockingEmail) {
+      setStockingEmailFilterActive(true);
+    }
+    if (state.openPoId) {
+      const po = pos.find((p) => p.id === state.openPoId);
+      if (po) setSelected(po);
+    }
+    navigate(location.pathname, { replace: true, state: null });
+  }, [pos, location.state, location.pathname, navigate]);
+
+  const pendingPiFilterActive =
+    filters.status?.selected.length === 1 && filters.status.selected[0] === PI_PENDING_STATUS;
+
+  const pendingCiFilterActive =
+    filters.status?.selected.length === 1 && filters.status.selected[0] === CI_PENDING_STATUS;
+
+  const rejectedPiFilterActive =
+    filters.status?.selected.length === 1 && filters.status.selected[0] === PI_REJECTED_STATUS;
+
+  const rejectedCiFilterActive =
+    filters.status?.selected.length === 1 && filters.status.selected[0] === CI_REJECTED_STATUS;
+
+  const applyPendingPiFilter = () => {
+    setFilters({ status: { search: "", selected: [PI_PENDING_STATUS] } });
+  };
+
+  const applyPendingCiFilter = () => {
+    setFilters({ status: { search: "", selected: [CI_PENDING_STATUS] } });
+  };
+
+  const applyRejectedPiFilter = () => {
+    setFilters({ status: { search: "", selected: [PI_REJECTED_STATUS] } });
+  };
+
+  const applyRejectedCiFilter = () => {
+    setFilters({ status: { search: "", selected: [CI_REJECTED_STATUS] } });
+  };
+
+  const applyPendingStockingEmailFilter = () => {
+    setStockingEmailFilterActive(true);
+  };
+
+  const pendingStockingEmailIds = useMemo(
+    () => new Set(pendingStockingEmail.map((p) => p.id)),
+    [pendingStockingEmail],
+  );
 
   const cellRaw = (p: PurchaseOrder, col: Col) => p[col.key];
 
@@ -135,6 +235,7 @@ export default function OrdersPage() {
 
   const rows = useMemo(() => {
     return pos.filter((p) => {
+      if (stockingEmailFilterActive && !pendingStockingEmailIds.has(p.id)) return false;
       if (q) {
         const hay = COLUMNS.map((c) => displayValue(c, cellRaw(p, c))).join(" ").toLowerCase();
         if (!hay.includes(q.toLowerCase())) return false;
@@ -148,7 +249,7 @@ export default function OrdersPage() {
       }
       return true;
     });
-  }, [pos, q, filters]);
+  }, [pos, q, filters, stockingEmailFilterActive, pendingStockingEmailIds]);
 
   const activeFilterCount = Object.values(filters).filter(
     (f) => f.search || f.selected.length,
@@ -187,6 +288,7 @@ export default function OrdersPage() {
   const clearAll = () => {
     setFilters({});
     setQ("");
+    setStockingEmailFilterActive(false);
   };
 
   const stagePill = (s: string) => {
@@ -196,7 +298,13 @@ export default function OrdersPage() {
 
   const handleDelete = async (e: React.MouseEvent, p: PurchaseOrder) => {
     e.stopPropagation();
-    if (!confirm(`Delete PO ${p.poNo}? This cannot be undone.`)) return;
+    if (
+      !confirm(
+        `Permanently delete PO ${p.poNo}? This removes the order, all line items, and history. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
     try {
       await api.deleteOrder(p.id);
       setPos((prev) => prev.filter((x) => x.id !== p.id));
@@ -208,7 +316,15 @@ export default function OrdersPage() {
 
   const renderCell = (p: PurchaseOrder, col: Col) => {
     const raw = cellRaw(p, col);
-    if (col.type === "status") return stagePill(String(raw ?? ""));
+    if (col.type === "status") {
+      return (
+        <span className="inline-flex items-center gap-1.5 flex-wrap">
+          {stagePill(String(raw ?? ""))}
+          <ResubmitTag po={p} kind="pi" />
+          <ResubmitTag po={p} kind="ci" />
+        </span>
+      );
+    }
     if (col.type === "url") {
       const v = raw ? String(raw) : "";
       if (!v) return "";
@@ -233,6 +349,16 @@ export default function OrdersPage() {
 
   return (
     <>
+      {isManager && pendingPiCount > 0 && (
+        <PiApprovalNotice pending={pendingPi} onOpenPo={setSelected} />
+      )}
+      {isFinance && pendingCiCount > 0 && (
+        <CiApprovalNotice pending={pendingCi} onOpenPo={setSelected} />
+      )}
+      {showStockingEmailQueue && pendingStockingEmailCount > 0 && (
+        <StockingEmailNotice pending={pendingStockingEmail} onOpenPo={setSelected} />
+      )}
+
       <div className="bg-white rounded-lg border border-slate-200">
         <div className="p-3 flex items-center gap-3 border-b border-slate-200 flex-wrap">
           <input
@@ -241,7 +367,72 @@ export default function OrdersPage() {
             onChange={(e) => setQ(e.target.value)}
             className="border border-slate-300 rounded-md px-3 py-1.5 text-sm w-72"
           />
-          {(activeFilterCount > 0 || q) && (
+          {isMaintainer && rejectedPi.length > 0 && (
+            <button
+              type="button"
+              onClick={applyRejectedPiFilter}
+              className={`flex items-center gap-1.5 text-sm rounded-md px-2.5 py-1.5 border ${
+                rejectedPiFilterActive
+                  ? "bg-red-100 border-red-400 text-red-900 font-medium"
+                  : "border-red-300 text-red-800 hover:bg-red-50"
+              }`}
+            >
+              Rejected PI ({rejectedPi.length})
+            </button>
+          )}
+          {isMaintainer && rejectedCi.length > 0 && (
+            <button
+              type="button"
+              onClick={applyRejectedCiFilter}
+              className={`flex items-center gap-1.5 text-sm rounded-md px-2.5 py-1.5 border ${
+                rejectedCiFilterActive
+                  ? "bg-red-100 border-red-400 text-red-900 font-medium"
+                  : "border-red-300 text-red-800 hover:bg-red-50"
+              }`}
+            >
+              Rejected CI ({rejectedCi.length})
+            </button>
+          )}
+          {isManager && pendingPiCount > 0 && (
+            <button
+              type="button"
+              onClick={applyPendingPiFilter}
+              className={`flex items-center gap-1.5 text-sm rounded-md px-2.5 py-1.5 border ${
+                pendingPiFilterActive
+                  ? "bg-amber-100 border-amber-400 text-amber-900 font-medium"
+                  : "border-amber-300 text-amber-800 hover:bg-amber-50"
+              }`}
+            >
+              Pending PI ({pendingPiCount})
+            </button>
+          )}
+          {isFinance && pendingCiCount > 0 && (
+            <button
+              type="button"
+              onClick={applyPendingCiFilter}
+              className={`flex items-center gap-1.5 text-sm rounded-md px-2.5 py-1.5 border ${
+                pendingCiFilterActive
+                  ? "bg-cyan-100 border-cyan-400 text-cyan-900 font-medium"
+                  : "border-cyan-300 text-cyan-800 hover:bg-cyan-50"
+              }`}
+            >
+              Pending CI ({pendingCiCount})
+            </button>
+          )}
+          {showStockingEmailQueue && pendingStockingEmailCount > 0 && (
+            <button
+              type="button"
+              onClick={applyPendingStockingEmailFilter}
+              className={`flex items-center gap-1.5 text-sm rounded-md px-2.5 py-1.5 border ${
+                stockingEmailFilterActive
+                  ? "bg-violet-100 border-violet-400 text-violet-900 font-medium"
+                  : "border-violet-300 text-violet-800 hover:bg-violet-50"
+              }`}
+            >
+              Pending client emails ({pendingStockingEmailCount})
+            </button>
+          )}
+          {(activeFilterCount > 0 || q || stockingEmailFilterActive) && (
             <button
               type="button"
               onClick={clearAll}
@@ -286,7 +477,21 @@ export default function OrdersPage() {
             </thead>
             <tbody>
               {rows.map((p) => (
-                <tr key={p.id} className="cursor-pointer" onClick={() => setSelected(p)}>
+                <tr
+                  key={p.id}
+                  className={`cursor-pointer ${
+                    isManager && p.status === PI_PENDING_STATUS
+                      ? "bg-amber-50/80 hover:bg-amber-100/80"
+                      : isFinance && p.status === CI_PENDING_STATUS
+                        ? "bg-cyan-50/80 hover:bg-cyan-100/80"
+                      : isMaintainer && p.status === PI_REJECTED_STATUS
+                        ? "bg-red-50/80 hover:bg-red-100/80"
+                        : isMaintainer && p.status === CI_REJECTED_STATUS
+                          ? "bg-red-50/80 hover:bg-red-100/80"
+                        : ""
+                  }`}
+                  onClick={() => setSelected(p)}
+                >
                   {COLUMNS.map((col) => (
                     <td
                       key={col.key as string}
@@ -297,7 +502,7 @@ export default function OrdersPage() {
                   ))}
                   <td className="actions-col">
                     <div className="flex items-center justify-end gap-2">
-                      {canEdit() && (
+                      {isSuperAdmin() && (
                         <button
                           type="button"
                           title="Delete order"
@@ -348,6 +553,7 @@ export default function OrdersPage() {
           onUpdated={(po) => {
             setPos((prev) => prev.map((x) => (x.id === po.id ? po : x)));
             setSelected(po);
+            notifyPoUpdated();
           }}
           onDeleted={(id) => {
             setPos((prev) => prev.filter((x) => x.id !== id));

@@ -14,7 +14,7 @@ Production-ready purchase order tracking application for UFP — from PO receipt
 - Dashboard with order status by stocking location and cycle times
 - Full PO lifecycle tracking (9 stages)
 - PDF PO upload with text extraction and field decoding
-- Role-based access: Super Admin, HQ/Sales, UAE sites, Logistics, Viewer
+- Role-based access: Super Admin, Maintainer, Manager, Finance, Logistics
 - Super admin user management (name, email, hashed password, role, access level, page restrictions)
 - Master data, pricing table, item summary
 - Export JSON / CSV
@@ -68,15 +68,15 @@ App at http://localhost:5173 (proxies `/api` to backend)
 | Role | Typical access |
 |------|----------------|
 | **Super Admin** | Everything + user management |
-| **HQ / Sales** | Full PO workflow, upload, pricing, master data |
-| **UAE sites** | Production stages, orders (no upload/pricing/master) |
-| **Logistics** | Arrival stage, orders view |
-| **Viewer** | Read-only on allowed pages |
+| **Maintainer** | Upload, edit POs, advance stages (except PI approval), pricing, master data |
+| **Manager** | View orders & dashboard; approve PI (PI Generated → PI Approved) |
+| **Finance** | View orders & dashboard; PI generation, payments, invoices, telex stages |
+| **Logistics** | View orders, production schedule; container loaded & arrival stages |
+| **Viewer** | View-only — dashboard, orders, production, items (no edits or stage actions) |
 
-Super admin can create users with:
+Only **Maintainer** (and Super Admin) can edit PO fields, upload new POs, or advance stages outside their lane. Other roles may only perform their assigned stage action on the current PO (e.g. Manager clicks **Approve PI**).
 
-- **Access level:** `FULL`, `READ_WRITE`, or `READ_ONLY`
-- **Restricted pages:** hide specific tabs (dashboard, orders, upload, items, pricing, master)
+Super admin can create users and optionally restrict which pages each user can see.
 
 ## Deploy to Render
 
