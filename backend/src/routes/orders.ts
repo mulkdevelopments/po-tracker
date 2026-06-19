@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma, requireAuth, requirePage, requirePoEdit, requireStageAdvance, requireSuperAdmin, requireWrite } from "../middleware/auth.js";
@@ -66,6 +67,10 @@ const intField = z.preprocess(
   (v) => (v === "" || v === null || v === undefined ? null : typeof v === "string" ? Math.round(Number(v)) : v),
   z.number().int().nullable(),
 ).optional();
+const optionalIntField = z.preprocess(
+  (v) => (v === "" || v === null || v === undefined ? undefined : typeof v === "string" ? Math.round(Number(v)) : v),
+  z.number().int().optional(),
+).optional();
 const strField = z.preprocess(
   (v) => (v === "" || v === undefined ? null : v),
   z.string().nullable(),
@@ -117,7 +122,7 @@ const poSchema = z.object({
   poToPi: intField,
   piValue: numField,
   piApprovedDate: strField,
-  piResubmitCount: intField,
+  piResubmitCount: optionalIntField,
   piRejectedNote: strField,
   dpDate: strField,
   piToDp: intField,
@@ -133,7 +138,7 @@ const poSchema = z.object({
   ciNo: strField,
   ciDate: strField,
   ciApprovedDate: strField,
-  ciResubmitCount: intField,
+  ciResubmitCount: optionalIntField,
   ciRejectedNote: strField,
   revisionSent: strField,
   freight: numField,
@@ -165,6 +170,23 @@ function todayISO() {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** Strip null resubmit counts — Prisma Int fields cannot be set to null. */
+function poCreateData(
+  poData: Record<string, unknown>,
+  company: ReturnType<typeof parseCompany>,
+  lines: z.infer<typeof lineSchema>[],
+): Prisma.PurchaseOrderCreateInput {
+  return {
+    ...(poData as Prisma.PurchaseOrderUncheckedCreateInput),
+    company,
+    lines: { create: lines },
+  };
+}
+
+function poUpdateData(poData: Record<string, unknown>): Prisma.PurchaseOrderUpdateInput {
+  return poData as Prisma.PurchaseOrderUpdateInput;
 }
 
 function stageIndex(s: string) {
@@ -278,9 +300,7 @@ router.post("/", requireAuth, requirePage("upload"), requirePoEdit, async (req, 
   const { lines, ...poData } = data;
   const po = await prisma.purchaseOrder.create({
     data: {
-      ...poData,
-      company,
-      lines: { create: lines },
+      ...poCreateData(poData, company, lines),
       history: {
         create: {
           stage: data.status,
@@ -308,7 +328,7 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
 
   const { lines, ...poData } = parsed.data;
   await prisma.$transaction(async (tx) => {
-    await tx.purchaseOrder.update({ where: { id }, data: poData });
+    await tx.purchaseOrder.update({ where: { id }, data: poUpdateData(poData) });
     if (lines) {
       await syncPoLines(tx, id, lines);
     }
@@ -826,9 +846,7 @@ router.post("/import", requireAuth, requirePage("master"), requireWrite, async (
     const { lines, ...poData } = parsed.data;
     await prisma.purchaseOrder.create({
       data: {
-        ...poData,
-        company,
-        lines: { create: lines },
+        ...poCreateData(poData, company, lines),
         history: {
           create: {
             stage: poData.status,

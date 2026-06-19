@@ -60,13 +60,11 @@ export function parsePiDocument(master: unknown): PiDocumentSettings {
 
 export function resolvePiDocument(company: Company, master?: unknown): Required<PiDocumentSettings> {
   const cfg = parsePiDocument(master);
-  const base: Required<PiDocumentSettings> = {
+  return {
     ...DEFAULT_PI_DOCUMENT,
     ...cfg,
     terms: cfg.terms?.length ? cfg.terms : DEFAULT_PI_DOCUMENT.terms!,
-  };
-  if (!cfg.customerName && company === "SYNERGY") {
-    base.customerName = SYNERGY_CUSTOMER;
-  }
-  return base;
+    customerName:
+      cfg.customerName ?? (company === "SYNERGY" ? SYNERGY_CUSTOMER : DEFAULT_PI_DOCUMENT.customerName!),
+  } as Required<PiDocumentSettings>;
 }
