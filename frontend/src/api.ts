@@ -3,7 +3,7 @@ import { STAGES } from "./types";
 import type { Company } from "./companies";
 
 const TOKEN_KEY = "po_tracker_token";
-// In production (Vercel) point at the Render API via VITE_API_URL.
+// Set VITE_API_URL in Vercel env for production. Dev/Docker use empty base → /api proxy or same origin.
 // In dev this stays empty and requests go through the Vite proxy to :4000.
 const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 let currentCompany: Company = "UFP";

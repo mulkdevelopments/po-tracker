@@ -88,6 +88,21 @@ Super admin can create users and optionally restrict which pages each user can s
    - `FRONTEND_URL` (your Render web service URL, e.g. `https://po-tracker.onrender.com`)
 4. Deploy — PostgreSQL and web service are provisioned from `render.yaml`
 
+## Deploy frontend to Vercel
+
+The frontend does **not** store the API URL in the repo. Set it in Vercel:
+
+1. Import the repo in Vercel (root directory; `vercel.json` builds `frontend/`)
+2. **Project Settings → Environment Variables** → add:
+   - **Name:** `VITE_API_URL`
+   - **Value:** your Render API URL, e.g. `https://po-tracker-api-v7iy.onrender.com` (no trailing slash)
+   - **Environments:** Production (and Preview if you use preview deploys)
+3. Redeploy after saving the variable (Vite bakes `VITE_*` vars in at build time)
+
+On Render, set `FRONTEND_URL` to your Vercel URL (e.g. `https://your-app.vercel.app`) for CORS.
+
+Local dev: leave `VITE_API_URL` unset; Vite proxies `/api` to the backend on port 4000.
+
 ## Project structure
 
 ```
