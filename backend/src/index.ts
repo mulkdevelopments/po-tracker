@@ -35,7 +35,11 @@ app.use(
       } catch {
         return cb(null, false);
       }
-      const ok = allowedOrigins.includes(origin) || host.endsWith(".vercel.app");
+      const ok =
+        allowedOrigins.includes(origin) ||
+        host.endsWith(".vercel.app") ||
+        host === "mulkinternational.co" ||
+        host.endsWith(".mulkinternational.co");
       return cb(null, ok);
     },
     credentials: true,

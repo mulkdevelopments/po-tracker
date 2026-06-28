@@ -27,6 +27,6 @@ services:
       - key: SUPER_ADMIN_PASSWORD
         sync: false
       - key: FRONTEND_URL
-        sync: false # set to your Vercel URL, e.g. https://po-tracker.vercel.app
+        sync: false # e.g. https://tracker.mulkinternational.co,https://po-tracker-eight.vercel.app
       - key: NODE_ENV
         value: production

@@ -99,7 +99,7 @@ The frontend does **not** store the API URL in the repo. Set it in Vercel:
    - **Environments:** Production (and Preview if you use preview deploys)
 3. Redeploy after saving the variable (Vite bakes `VITE_*` vars in at build time)
 
-On Render, set `FRONTEND_URL` to your Vercel URL (e.g. `https://your-app.vercel.app`) for CORS.
+On Render, set `FRONTEND_URL` to your frontend URL(s), comma-separated (e.g. `https://tracker.mulkinternational.co,https://po-tracker-eight.vercel.app`) for CORS. The API also allows `*.mulkinternational.co` and `*.vercel.app` origins.
 
 Local dev: leave `VITE_API_URL` unset; Vite proxies `/api` to the backend on port 4000.
 
