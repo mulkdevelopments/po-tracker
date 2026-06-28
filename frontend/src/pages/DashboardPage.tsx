@@ -7,13 +7,8 @@ import { fmtMoney, fmtNum } from "../utils";
 import { computeDashboard, statusMix, totalRow, dashboardActiveYearOrders, type VolumeRow } from "../reports";
 import { StatusDoughnut, AnnualSalesPanel, CapacityPanel, DashboardYearFilter } from "../components/DashboardCharts";
 import PoDrawer from "../components/PoDrawer";
-import PiApprovalNotice from "../components/PiApprovalNotice";
-import CiApprovalNotice from "../components/CiApprovalNotice";
 import StockingEmailNotice from "../components/StockingEmailNotice";
-import { usePendingPiApprovals } from "../hooks/usePendingPiApprovals";
-import { usePendingCiApprovals } from "../hooks/usePendingCiApprovals";
 import { usePendingStockingEmails } from "../hooks/usePendingStockingEmails";
-import { isManagerRole, isFinanceRole } from "../piApproval";
 import { canMarkStockingEmailRole } from "../stockingEmail";
 import { notifyPoUpdated } from "../poEvents";
 import type { MasterData } from "../types";
@@ -124,11 +119,7 @@ function VolumeTable({ title, rows, year }: { title: string; rows: VolumeRow[]; 
 
 export default function DashboardPage() {
   const { user, canEdit } = useAuth();
-  const isManager = isManagerRole(user?.role);
-  const isFinance = isFinanceRole(user?.role);
   const showStockingEmailQueue = canMarkStockingEmailRole(user?.role);
-  const { pending: pendingPi } = usePendingPiApprovals(isManager);
-  const { pending: pendingCi } = usePendingCiApprovals(isFinance);
   const { pending: pendingStockingEmail } = usePendingStockingEmails(!!showStockingEmailQueue);
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [ref, setRef] = useState<ReferenceData | null>(null);
@@ -177,7 +168,6 @@ export default function DashboardPage() {
 
   const d = computeDashboard(pos, ref, year);
   const mix = statusMix(pos, year);
-  const showFinance = user?.role === "FINANCE" || user?.role === "MANAGER" || user?.role === "MAINTAINER" || user?.role === "SUPER_ADMIN";
   const yearScope = `PO date in ${year} · Total PO includes inactive`;
 
   const stagePill = (s: string) => {
@@ -187,12 +177,6 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {isManager && pendingPi.length > 0 && (
-        <PiApprovalNotice pending={pendingPi} onOpenPo={(po) => setSelected(po)} />
-      )}
-      {isFinance && pendingCi.length > 0 && (
-        <CiApprovalNotice pending={pendingCi} onOpenPo={(po) => setSelected(po)} />
-      )}
       {showStockingEmailQueue && pendingStockingEmail.length > 0 && (
         <StockingEmailNotice pending={pendingStockingEmail} onOpenPo={(po) => setSelected(po)} />
       )}
@@ -217,8 +201,8 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {showFinance && <AnnualSalesPanel pos={pos} year={year} />}
-      {showFinance && config && (
+      <AnnualSalesPanel pos={pos} year={year} />
+      {config && (
         <CapacityPanel pos={pos} year={year} config={config} canEditMaster={canEdit()} />
       )}
 
