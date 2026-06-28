@@ -10,7 +10,7 @@ services:
   - type: web
     name: po-tracker-api
     runtime: node
-    plan: free
+    plan: starter
     rootDir: backend
     buildCommand: npm ci && npm run build && npx prisma generate
     startCommand: npx prisma migrate deploy && node dist/seed.js && node dist/index.js
