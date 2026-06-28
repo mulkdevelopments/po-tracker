@@ -18,10 +18,10 @@ export const COMPANIES: {
   },
   {
     id: "SYNERGY",
-    label: "Synergy",
-    initial: "S",
+    label: "Cynergy",
+    initial: "C",
     brandColor: "bg-teal-600",
-    title: "Synergy Order Tracker",
+    title: "Cynergy Order Tracker",
     tagline: "PO → Production → Shipping → Delivery",
   },
 ];

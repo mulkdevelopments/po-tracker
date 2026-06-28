@@ -239,6 +239,15 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
+  decodeSynergyPages: (pages: string[]) =>
+    request<{ pos: Record<string, unknown>[]; pageCount: number }>(
+      `/upload/decode-synergy-pages${companyParam()}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ pages }),
+      },
+    ),
+
   lookupProduct: (partNo: string) =>
     request<{ line: Record<string, unknown>; product: Record<string, unknown> }>(
       `/upload/product/${encodeURIComponent(partNo)}${companyParam()}`,

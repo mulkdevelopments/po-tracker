@@ -3,7 +3,7 @@ export type Company = (typeof COMPANIES)[number];
 
 export const COMPANY_LABELS: Record<Company, string> = {
   UFP: "UFP",
-  SYNERGY: "Synergy",
+  SYNERGY: "Cynergy",
 };
 
 export function parseCompany(value: unknown): Company {

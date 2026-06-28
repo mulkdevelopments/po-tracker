@@ -49,7 +49,7 @@ export const DEFAULT_PI_DOCUMENT: PiDocumentSettings = {
     "As per the Federal Decree Law No. 8 of 2017 on Value Added Tax, the supply of goods and services under Reverse Charge Basis is subject to VAT at 5%. The recipient is responsible for accounting for VAT under the Reverse Charge mechanism.",
 };
 
-const SYNERGY_CUSTOMER = "Synergy Building Products";
+const SYNERGY_CUSTOMER = "Cynergy";
 
 export function parsePiDocument(master: unknown): PiDocumentSettings {
   if (!master || typeof master !== "object") return {};

@@ -3,6 +3,7 @@ import multer from "multer";
 import pdf from "pdf-parse";
 import { prisma, requireAuth, requirePage } from "../middleware/auth.js";
 import { parseCompany } from "../companies.js";
+import { guessSynergyPage, guessSynergyPages } from "../synergyDecode.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const router = Router();
@@ -250,9 +251,25 @@ router.post(
 router.post("/decode-text", requireAuth, requirePage("upload"), async (req, res) => {
   const text = req.body?.text as string;
   if (!text?.trim()) return res.status(400).json({ error: "Text required" });
-  const ref = await loadRef(parseCompany(req.query.company));
+  const company = parseCompany(req.query.company);
+  const ref = await loadRef(company);
+  if (company === "SYNERGY") {
+    const guess = guessSynergyPage(text, ref);
+    return res.json({ guess });
+  }
   const guess = guessFields(text, ref);
   res.json({ guess });
+});
+
+router.post("/decode-synergy-pages", requireAuth, requirePage("upload"), async (req, res) => {
+  const pages = req.body?.pages as string[];
+  if (!Array.isArray(pages) || pages.length === 0) {
+    return res.status(400).json({ error: "pages array required" });
+  }
+  if (pages.length > 50) return res.status(400).json({ error: "Maximum 50 pages per upload" });
+  const ref = await loadRef("SYNERGY");
+  const pos = guessSynergyPages(pages, ref);
+  res.json({ pos, pageCount: pages.length });
 });
 
 // Look up a single catalog product by part number (for manual line entry autofill).

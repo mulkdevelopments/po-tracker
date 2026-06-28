@@ -12,6 +12,7 @@ import {
   loadUploadDraft,
   saveUploadDraft,
 } from "../uploadDraft";
+import { extractSynergyPdfPages } from "../synergyPdf";
 import { fmtMoney, fmtNum, todayISO } from "../utils";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -22,6 +23,13 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 type LineForm = Record<string, string>;
 type Product = ReferenceData["products"][number];
 type DuplicatePo = { id: number; poNo: string; rev: number; status?: string | null };
+type SynergyBatchItem = {
+  page: number;
+  guess: Record<string, unknown>;
+  selected: boolean;
+  saved: boolean;
+  duplicate: DuplicatePo | null;
+};
 
 // Header fields computed automatically on upload — shown read-only to cut manual entry.
 const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "totalM2", "skids", "status"]);
@@ -56,6 +64,27 @@ function lineToForm(l: Record<string, unknown>): LineForm {
   return row;
 }
 
+function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: boolean): Record<string, unknown> {
+  const gLines = (g.lines as Record<string, unknown>[]) || [];
+  const lines = gLines.map(lineToForm);
+  const totals = summarizeLines(lines);
+  return {
+    siNo: String(siNo),
+    poNo: toStr(g.poNo),
+    rev: toStr(g.rev ?? 0),
+    poDate: toStr(g.poDate) || todayISO(),
+    stockingLocation: toStr(g.stockingLocation),
+    portOfDest: toStr(g.portOfDest),
+    concat: toStr(g.concat) || (toStr(g.poNo) ? `${toStr(g.poNo)}-${toStr(g.rev ?? 0)}` : ""),
+    poValue: g.poValue != null ? toStr(g.poValue) : totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
+    totalM2: g.totalM2 != null ? toStr(g.totalM2) : totals.totalM2 ? String(Math.round(totals.totalM2 * 1000) / 1000) : "",
+    skids: g.skids != null ? toStr(g.skids) : totals.skids ? String(totals.skids) : "",
+    status: "PO Received",
+    active: orderActive,
+    lines: lines.map((l, idx) => ({ ...l, lineNo: l.lineNo || String(idx + 1) })),
+  };
+}
+
 export default function UploadPage() {
   const { canEdit } = useAuth();
   const { company } = useCompany();
@@ -71,6 +100,9 @@ export default function UploadPage() {
   const [pasteText, setPasteText] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
+  const [synergyBatch, setSynergyBatch] = useState<SynergyBatchItem[]>([]);
+  const [activeBatchPage, setActiveBatchPage] = useState<number | null>(null);
+  const [batchSaving, setBatchSaving] = useState(false);
 
   // Restore draft or fresh SI No. when the page (or company) loads.
   useEffect(() => {
@@ -95,6 +127,8 @@ export default function UploadPage() {
       setPasteText("");
       setStatus("");
     }
+    setSynergyBatch([]);
+    setActiveBatchPage(null);
 
     Promise.all([api.getReference(), api.getUploadMeta()]).then(([r, meta]) => {
       if (cancelled) return;
@@ -141,6 +175,8 @@ export default function UploadPage() {
     setPasteText("");
     setStatus("");
     setDuplicate(null);
+    setSynergyBatch([]);
+    setActiveBatchPage(null);
     const meta = await api.getUploadMeta();
     setForm({
       ...blankForm(),
@@ -271,7 +307,7 @@ export default function UploadPage() {
   const addLine = () => setLines((prev) => [...prev, { lineNo: String(prev.length + 1) }]);
   const removeLine = (i: number) => setLines((prev) => prev.filter((_, idx) => idx !== i));
 
-  const applyGuess = (g: Record<string, unknown>) => {
+  const applyGuess = (g: Record<string, unknown>, batchPage?: number) => {
     const gLines = (g.lines as Record<string, unknown>[]) || [];
     const computed = summarizeLines(gLines.map(lineToForm));
     setForm((f) => ({
@@ -288,8 +324,115 @@ export default function UploadPage() {
       status: "PO Received",
     }));
     setLines(gLines.map(lineToForm));
+    if (batchPage != null) setActiveBatchPage(batchPage);
     const matched = Number(g.matchedCount) || 0;
-    setStatus(`Decoded ${gLines.length} line(s)${matched ? `, ${matched} matched to catalog` : ""}. Totals and SI No. filled automatically — review below.`);
+    const pageNote = batchPage != null ? ` (page ${batchPage})` : "";
+    setStatus(
+      `Decoded ${gLines.length} line(s)${matched ? `, ${matched} matched to catalog` : ""}${pageNote}. Review below.`,
+    );
+  };
+
+  const checkBatchDuplicates = async (items: SynergyBatchItem[]): Promise<SynergyBatchItem[]> =>
+    Promise.all(
+      items.map(async (item) => {
+        const poNo = toStr(item.guess.poNo).trim();
+        if (!poNo) return { ...item, duplicate: null };
+        try {
+          const rev = Math.round(Number(item.guess.rev ?? 0)) || 0;
+          const { exists, po } = await api.checkOrderExists(poNo, rev);
+          return { ...item, duplicate: exists && po ? po : null };
+        } catch {
+          return { ...item, duplicate: null };
+        }
+      }),
+    );
+
+  const loadSynergyBatch = async (pages: string[], usedOcr: boolean) => {
+    const { pos } = await api.decodeSynergyPages(pages);
+    const items: SynergyBatchItem[] = pos.map((guess, i) => ({
+      page: Number(guess.page) || i + 1,
+      guess,
+      selected: true,
+      saved: false,
+      duplicate: null,
+    }));
+    const withDupes = await checkBatchDuplicates(items);
+    setSynergyBatch(withDupes);
+    const first = withDupes.find((b) => !b.duplicate) ?? withDupes[0];
+    if (first) {
+      const meta = await api.getUploadMeta();
+      setForm((f) => ({ ...f, siNo: String(meta.nextSiNo) }));
+      applyGuess(first.guess, first.page);
+    }
+    const matched = withDupes.reduce((s, b) => s + (Number(b.guess.matchedCount) || 0), 0);
+    const dupes = withDupes.filter((b) => b.duplicate).length;
+    setStatus(
+      `${usedOcr ? "OCR + decode" : "Decode"}: ${withDupes.length} PO(s) from ${pages.length} page(s), ${matched} catalog match(es)${dupes ? `, ${dupes} already in tracker` : ""}.`,
+    );
+  };
+
+  const loadBatchItem = (item: SynergyBatchItem) => {
+    if (activeBatchPage != null && activeBatchPage !== item.page) {
+      setSynergyBatch(mergeEditorIntoBatch(synergyBatch));
+    }
+    applyGuess(item.guess, item.page);
+  };
+
+  const mergeEditorIntoBatch = (batch: SynergyBatchItem[]): SynergyBatchItem[] => {
+    if (activeBatchPage == null) return batch;
+    return batch.map((item) =>
+      item.page === activeBatchPage
+        ? {
+            ...item,
+            guess: {
+              ...item.guess,
+              poNo: form.poNo,
+              rev: Number(form.rev || 0),
+              poDate: form.poDate,
+              stockingLocation: form.stockingLocation,
+              portOfDest: form.portOfDest,
+              concat: form.concat,
+              poValue: form.poValue ? Number(form.poValue) : null,
+              totalM2: form.totalM2 ? Number(form.totalM2) : null,
+              skids: form.skids ? Number(form.skids) : null,
+              lines: lines.map((l) => ({ ...l })),
+              matchedCount: lines.filter((l) => l.partNo?.trim()).length,
+            },
+          }
+        : item,
+    );
+  };
+
+  const saveSelectedBatch = async () => {
+    const batch = mergeEditorIntoBatch(synergyBatch);
+    setSynergyBatch(batch);
+    const pending = batch.filter((b) => b.selected && !b.saved && !b.duplicate);
+    if (!pending.length) {
+      alert("No POs selected to save (or all are duplicates/already saved).");
+      return;
+    }
+    setBatchSaving(true);
+    try {
+      let siNo = Number(form.siNo) || (await api.getUploadMeta()).nextSiNo;
+      const savedPages = new Set<number>();
+      for (const item of pending) {
+        const payload = guessToPayload(item.guess, siNo, active);
+        await api.createOrder(payload);
+        savedPages.add(item.page);
+        siNo += 1;
+      }
+      const updated = batch.map((b) => (savedPages.has(b.page) ? { ...b, saved: true, selected: false } : b));
+      setSynergyBatch(updated);
+      setStatus(`Saved ${savedPages.size} PO(s) to the tracker.`);
+      if (savedPages.size === batch.length) {
+        clearUploadDraft(company);
+        navigate("/orders");
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to save batch");
+    } finally {
+      setBatchSaving(false);
+    }
   };
 
   const extractPdfText = async (file: File): Promise<string> => {
@@ -330,7 +473,19 @@ export default function UploadPage() {
   const handleFile = async (file: File) => {
     setBusy(true);
     setStatus(`Reading ${file.name}…`);
+    setSynergyBatch([]);
+    setActiveBatchPage(null);
     try {
+      if (company === "SYNERGY" && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) {
+        const { pages, usedOcr } = await extractSynergyPdfPages(file, setStatus);
+        if (!pages.some((p) => p.trim())) {
+          setStatus("Could not extract any text from the PDF. Enter POs manually below.");
+          return;
+        }
+        await loadSynergyBatch(pages, usedOcr);
+        return;
+      }
+
       let text = "";
       if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
         text = await extractPdfText(file);
@@ -361,13 +516,25 @@ export default function UploadPage() {
     }
     setSaving(true);
     try {
+      if (activeBatchPage != null) setSynergyBatch(mergeEditorIntoBatch(synergyBatch));
       const payload: Record<string, unknown> = { ...form, active };
       if (!form.poValue) payload.poValue = totals.poValue || null;
       if (!form.totalM2) payload.totalM2 = totals.totalM2 || null;
       if (!form.skids) payload.skids = totals.skids || null;
       payload.lines = lines.map((l, idx) => ({ ...l, lineNo: l.lineNo || String(idx + 1) }));
       await api.createOrder(payload);
+      if (activeBatchPage != null) {
+        setSynergyBatch((prev) =>
+          prev.map((b) => (b.page === activeBatchPage ? { ...b, saved: true, selected: false } : b)),
+        );
+      }
       clearUploadDraft(company);
+      const remaining = synergyBatch.filter((b) => !b.saved && b.page !== activeBatchPage).length;
+      if (synergyBatch.length && remaining > 0) {
+        setStatus(`PO saved. ${remaining} more in batch — review and save the rest.`);
+        setSaving(false);
+        return;
+      }
       navigate("/orders");
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to create PO");
@@ -456,7 +623,16 @@ export default function UploadPage() {
       <div className="bg-white rounded-lg border border-slate-200 p-5">
         <div className="font-semibold mb-1">Upload a Purchase Order</div>
         <div className="text-sm text-slate-500 mb-4">
-          Drop a PO (PDF). Typed PDFs are read directly; scanned/image PDFs are run through OCR. Recognized part numbers are auto-filled from the catalog — SI No., totals, skids, and concat are computed for you. Your work is kept as a draft if you switch pages before saving.
+          {company === "SYNERGY" ? (
+            <>
+              Drop a Cynergy ORDER FORM PDF (scanned/handwritten). Each page is OCR’d using fixed form zones
+              (date, PO #, description column, quantity column) for better accuracy. Review and save each PO.
+            </>
+          ) : (
+            <>
+              Drop a PO (PDF). Typed PDFs are read directly; scanned/image PDFs are run through OCR. Recognized part numbers are auto-filled from the catalog — SI No., totals, skids, and concat are computed for you. Your work is kept as a draft if you switch pages before saving.
+            </>
+          )}
         </div>
         {draftRestored && (
           <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 flex flex-wrap items-center gap-2">
@@ -481,13 +657,125 @@ export default function UploadPage() {
             <textarea rows={5} value={pasteText} onChange={(e) => setPasteText(e.target.value)}
               className="w-full border border-slate-300 rounded-md p-2 text-xs font-mono" placeholder="…or paste raw PO text here" />
             <button type="button" disabled={busy || !pasteText.trim()}
-              onClick={async () => { const { guess } = await api.decodeText(pasteText); applyGuess(guess); }}
+              onClick={async () => {
+                if (company === "SYNERGY") {
+                  const { pos } = await api.decodeSynergyPages([pasteText]);
+                  if (pos.length === 1) applyGuess(pos[0]);
+                  else await loadSynergyBatch([pasteText], false);
+                } else {
+                  const { guess } = await api.decodeText(pasteText);
+                  applyGuess(guess);
+                }
+              }}
               className="mt-2 px-3 py-1.5 text-sm rounded-md border border-slate-300 disabled:opacity-50">
               Decode pasted text
             </button>
           </div>
         </div>
         {status && !duplicate && <div className="text-xs text-slate-600 mt-3">{status}</div>}
+        {synergyBatch.length > 0 && (
+          <div className="mt-4 border border-teal-200 rounded-lg overflow-hidden">
+            <div className="bg-teal-50 px-3 py-2 flex flex-wrap items-center gap-2 border-b border-teal-200">
+              <span className="text-sm font-medium text-teal-900">
+                Batch: {synergyBatch.length} PO(s) from PDF
+              </span>
+              <button
+                type="button"
+                disabled={batchSaving}
+                onClick={() => setSynergyBatch((prev) => prev.map((b) => ({ ...b, selected: !b.saved && !b.duplicate })))}
+                className="text-xs px-2 py-1 rounded border border-teal-300 hover:bg-teal-100"
+              >
+                Select all saveable
+              </button>
+              <button
+                type="button"
+                disabled={batchSaving}
+                onClick={() => void saveSelectedBatch()}
+                className="ml-auto text-xs px-3 py-1.5 rounded-md bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50"
+              >
+                {batchSaving ? "Saving…" : "Save selected POs"}
+              </button>
+            </div>
+            <div className="overflow-x-auto max-h-64 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 sticky top-0">
+                  <tr>
+                    <th className="px-2 py-1.5 text-left w-8"></th>
+                    <th className="px-2 py-1.5 text-left">Page</th>
+                    <th className="px-2 py-1.5 text-left">PO #</th>
+                    <th className="px-2 py-1.5 text-left">Date</th>
+                    <th className="px-2 py-1.5 text-right">Lines</th>
+                    <th className="px-2 py-1.5 text-right">Matched</th>
+                    <th className="px-2 py-1.5 text-right">m²</th>
+                    <th className="px-2 py-1.5 text-left">Status</th>
+                    <th className="px-2 py-1.5"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {synergyBatch.map((item) => {
+                    const g = item.guess;
+                    const lineCount = ((g.lines as unknown[]) || []).length;
+                    const matched = Number(g.matchedCount) || 0;
+                    const isActive = activeBatchPage === item.page;
+                    let rowStatus = "Ready";
+                    if (item.saved) rowStatus = "Saved";
+                    else if (item.duplicate) rowStatus = "Duplicate";
+                    else if (!toStr(g.poNo).trim()) rowStatus = "Missing PO #";
+                    return (
+                      <tr
+                        key={item.page}
+                        className={`border-t border-slate-100 ${isActive ? "bg-teal-50/80" : "hover:bg-slate-50"}`}
+                      >
+                        <td className="px-2 py-1.5">
+                          <input
+                            type="checkbox"
+                            checked={item.selected}
+                            disabled={item.saved || !!item.duplicate}
+                            onChange={(e) =>
+                              setSynergyBatch((prev) =>
+                                prev.map((b) => (b.page === item.page ? { ...b, selected: e.target.checked } : b)),
+                              )
+                            }
+                          />
+                        </td>
+                        <td className="px-2 py-1.5 font-mono">{item.page}</td>
+                        <td className="px-2 py-1.5 font-mono">{toStr(g.poNo) || "—"}</td>
+                        <td className="px-2 py-1.5">{toStr(g.poDate) || "—"}</td>
+                        <td className="px-2 py-1.5 text-right">{lineCount}</td>
+                        <td className="px-2 py-1.5 text-right">{matched}/{lineCount}</td>
+                        <td className="px-2 py-1.5 text-right">{fmtNum(Number(g.totalM2) || 0, 0)}</td>
+                        <td className="px-2 py-1.5">
+                          <span
+                            className={
+                              rowStatus === "Saved"
+                                ? "text-emerald-700"
+                                : rowStatus === "Duplicate"
+                                  ? "text-amber-700"
+                                  : rowStatus === "Missing PO #"
+                                    ? "text-red-600"
+                                    : "text-slate-600"
+                            }
+                          >
+                            {rowStatus}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => loadBatchItem(item)}
+                            className="text-teal-700 hover:underline"
+                          >
+                            {isActive ? "Editing" : "Review"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         {duplicate && (
           <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <div className="font-medium">This PO already exists in the tracker.</div>
@@ -584,8 +872,8 @@ export default function UploadPage() {
               Discard draft
             </button>
           )}
-          <button type="button" disabled={saving || !!duplicate} onClick={save} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-50">
-            {duplicate ? "PO already exists" : saving ? "Saving…" : "Save PO to tracker"}
+          <button type="button" disabled={saving || batchSaving || !!duplicate} onClick={save} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-50">
+            {duplicate ? "PO already exists" : saving ? "Saving…" : synergyBatch.length ? "Save current PO" : "Save PO to tracker"}
           </button>
         </div>
       </div>
