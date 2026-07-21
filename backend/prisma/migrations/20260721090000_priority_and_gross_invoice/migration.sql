@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "PurchaseOrder" ADD COLUMN IF NOT EXISTS "grossInvoiceValue" DOUBLE PRECISION;
+ALTER TABLE "PurchaseOrder" ADD COLUMN IF NOT EXISTS "priority" TEXT NOT NULL DEFAULT 'Standard';

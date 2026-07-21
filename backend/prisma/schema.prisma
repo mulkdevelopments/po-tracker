@@ -59,6 +59,10 @@ model PurchaseOrder {
   stockingLocation  String?
   portOfDest        String?
   poValue           Float?
+  /// Gross invoice value (m² / Ext Inv based)
+  grossInvoiceValue Float?
+  /// Standard (default) or High
+  priority          String      @default("Standard")
   totalM2           Float?
   productionSite    String?
   productionStart   String?
@@ -97,6 +101,7 @@ model PurchaseOrder {
   telexDate         String?
   bpToTelex         Int?
   arrivalDate       String?
+  planningDate      String?
   notes             String?
   soNo                 String?
   standardColorsOnly   String?
@@ -105,6 +110,8 @@ model PurchaseOrder {
   productionComplete   String?
   dispatchFromFactory  String?
   piSent               String?
+  /// Manual / drag-drop order within priority (lower = sooner)
+  productionSequence   Int?
   productionStatus     String?
   productionNotes      String?
   stockingEmailSentAt  String?
@@ -139,6 +146,10 @@ model PoLine {
   extInv     Float?
   leadTime        Int?
   notes           String?
+  /// Date used to look up the price (usually PO date)
+  priceAsOf       String?
+  /// Effective-from of the ProductPrice row applied to this line
+  priceEffectiveFrom String?
   actualQtyM2     Float?
   actualSheets    Float?
   actualSkids     Float?
@@ -196,11 +207,51 @@ model Product {
   description     String?
   colorName       String?
   vendorColorCode String?
+  /// Current open price (denormalized from latest ProductPrice for fast lookup)
   pricePerSqft    Float?
   pricePerM2      Float?
   pricePerMsq     Float?
   pricePerSheet   Float?
   leadTimeDays    Int?
+  effectiveFrom   String?
+  effectiveTo     String?
+  prices          ProductPrice[]
+}
+
+/// Dated price versions — updating price creates a new row; old POs keep stamped line rates.
+model ProductPrice {
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  pricePerSqft  Float?
+  pricePerM2    Float?
+  pricePerMsq   Float?
+  pricePerSheet Float?
+  leadTimeDays  Int?
+  /// Inclusive start (YYYY-MM-DD)
+  effectiveFrom String
+  /// Inclusive end (YYYY-MM-DD). Null = current / open-ended.
+  effectiveTo   String?
+  createdAt     DateTime @default(now())
+
+  @@index([productId, effectiveFrom])
+}
+
+model CapacityPeriod {
+  id                  Int     @id @default(autoincrement())
+  /// Inclusive start (YYYY-MM-DD)
+  effectiveFrom       String
+  /// Inclusive end (YYYY-MM-DD). Null = current / open-ended.
+  effectiveTo         String?
+  label               String?
+  productionLines     Int     @default(2)
+  m2PerLinePerDay     Float   @default(3000)
+  m2PerContainer      Float   @default(8300)
+  workingDaysPerMonth Int     @default(26)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([effectiveFrom])
 }
 
 model AppConfig {

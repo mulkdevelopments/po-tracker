@@ -14,15 +14,16 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { fmtMoney, fmtNum } from "../utils";
+import { fmtMoney, fmtNum, todayISO } from "../utils";
 import {
   computeMonthly,
-  computeCapacity,
+  computeCapacityWithPeriods,
+  capacityConfigForDate,
   availableYears,
   MONTH_NAMES,
   type StatusSlice,
 } from "../reports";
-import type { PurchaseOrder, AppConfigData } from "../types";
+import type { PurchaseOrder, AppConfigData, CapacityPeriod } from "../types";
 
 const STATUS_PALETTE = [
   "#64748b", "#f59e0b", "#eab308", "#fb923c", "#3b82f6",
@@ -214,20 +215,23 @@ export function CapacityPanel({
   pos,
   year,
   config,
+  capacityPeriods = [],
   canEditMaster,
 }: {
   pos: PurchaseOrder[];
   year: number;
   config: AppConfigData;
+  capacityPeriods?: CapacityPeriod[];
   canEditMaster?: boolean;
 }) {
-  const c = {
+  const fallback = {
     lines: Number(config.productionLines) || 2,
     m2PerLinePerDay: Number(config.m2PerLinePerDay) || 3000,
     m2PerContainer: Number(config.m2PerContainer) || 8300,
     workingDaysPerMonth: Number(config.workingDaysPerMonth) || 26,
   };
-  const rows = computeCapacity(pos, year, c);
+  const c = capacityConfigForDate(capacityPeriods, todayISO(), fallback);
+  const rows = computeCapacityWithPeriods(pos, year, capacityPeriods, fallback);
   const totalActual = rows.reduce((s, r) => s + r.containers, 0);
   const totalCapacity = rows.reduce((s, r) => s + r.capContainers, 0);
   const ytdUtil = totalCapacity ? (totalActual / totalCapacity) * 100 : 0;
@@ -246,7 +250,10 @@ export function CapacityPanel({
       <div className="flex items-center gap-3 mb-3">
         <div>
           <div className="font-semibold text-slate-900">Production — Actual vs Capacity ({year})</div>
-          <div className="text-xs text-slate-500">Containers shipped per month vs theoretical capacity. Current month pro-rated to today.</div>
+          <div className="text-xs text-slate-500">
+            Containers shipped per month vs theoretical capacity
+            {capacityPeriods.length > 0 ? " (uses capacity periods by month)." : "."} Current month pro-rated to today.
+          </div>
         </div>
         <span className="ml-auto text-[11px] bg-slate-100 text-slate-700 px-2 py-1 rounded-md">HQ / Sales view</span>
       </div>

@@ -1,8 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { STAGE_COLORS, STAGES } from "../types";
+import { createPortal } from "react-dom";
+import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, AuthUser, MasterData, PoLine, ReferenceData } from "../types";
-import { canAdvanceStage, canEditProductionActualsForPo, canManageUsers, api } from "../api";
-import { fmtMoney, fmtNum, fmtDate, stageIndex, todayISO, addWeeksISO } from "../utils";
+import { canAdvanceStage, canEditProductionActualsForPo, canManageUsers, getAllowedAdvanceStages, api } from "../api";
+import { fmtMoney, fmtNum, fmtDate, todayISO, addWeeksISO } from "../utils";
+import {
+  deriveStatusFromFields,
+  resolvePipelineStatus,
+  getSubstageLabel,
+  type WorkflowCompany,
+} from "../workflows";
+import PipelineProgress from "./PipelineProgress";
+import PipelineStepActions from "./PipelineStepActions";
+import StageMilestoneEditor from "./StageMilestoneEditor";
 import { PO_SECTIONS as EDIT_SECTIONS, LINE_COLS } from "../poFields";
 import {
   PI_PENDING_STATUS,
@@ -20,6 +30,13 @@ import { autoShippingUrl } from "../shippingTracking";
 import ResubmitTag from "./ResubmitTag";
 import { ProductionCompleteTrigger, ProductionActualsEditTrigger } from "./ProductionCompleteAdvance";
 import StockingEmailQueue from "./StockingEmailQueue";
+import PiEmailQueue from "./PiEmailQueue";
+import { balancePaymentFlag, downpaymentFlag, resolveGrossInvoiceValue } from "../paymentFlags";
+
+function ModalPortal({ children }: { children: React.ReactNode }) {
+  return createPortal(children, document.body);
+}
+
 function lineHasActuals(l: PoLine) {
   return l.actualQtyM2 != null || l.actualSheets != null || l.actualSkids != null;
 }
@@ -56,60 +73,44 @@ interface Props {
   canEdit: boolean;
 }
 
-const has = (v: unknown) => v != null && String(v).trim() !== "" && v !== "N/A";
-
 // Milestone fields whose presence implies a pipeline stage.
 const MILESTONE_KEYS = new Set([
-  "piNo", "piDate", "piApprovedDate", "dpDate", "dpAmount", "productionStart", "productionEtc",
-  "productionComplete", "containerNo", "actualDeparture", "ciNo", "ciDate", "ciApprovedDate",
-  "bol", "shippingLine", "shippingUrl", "bpDate", "bpAmount", "telexDate",
+  "planningDate", "piNo", "piDate", "piApprovedDate", "piSent", "dpDate", "dpAmount",
+  "allMaterialAvailable", "productionStart", "productionEtc", "productionComplete",
+  "dispatchFromFactory", "containerNo", "actualDeparture", "ciNo", "ciDate", "ciApprovedDate",
+  "revisionSent", "bol", "shippingLine", "shippingUrl", "bpDate", "bpAmount", "telexDate", "arrivalDate",
 ]);
 
-function resolvePipelineStatus(status: string): string {
-  if (status === PI_REJECTED_STATUS) return PI_PENDING_STATUS;
-  if (status === CI_REJECTED_STATUS) return CI_PENDING_STATUS;
-  return status;
-}
-
-function pipelineStepIndex(status: string): number {
-  if (status === PI_REJECTED_STATUS) return STAGES.indexOf(PI_PENDING_STATUS);
-  if (status === CI_REJECTED_STATUS) return STAGES.indexOf(CI_PENDING_STATUS);
-  return stageIndex(status, STAGES);
-}
-
-// Derive the furthest reached pipeline stage from the populated fields.
-function deriveStatus(f: Record<string, string>): string {
-  if (has(f.telexDate)) return "Telex / Seaway Released";
-  if (has(f.bpDate) || has(f.bpAmount)) return "Balance Payment Received";
-  if (has(f.bol) || has(f.shippingLine)) return "BL";
-  if (has(f.ciApprovedDate)) return "CI approved";
-  if (has(f.ciNo) || has(f.ciDate)) return "CI sent";
-  if (has(f.containerNo) || has(f.actualDeparture)) return "Container Loaded";
-  if (has(f.productionComplete)) return "Production Complete";
-  if (has(f.productionStart) || has(f.productionEtc)) return "In Production";
-  if (has(f.dpDate) || has(f.dpAmount)) return "Downpayment Received";
-  if (has(f.piApprovedDate)) return "PI Approved";
-  if (has(f.piNo) || has(f.piDate)) return "PI Generated";
-  return "PO Received";
+function deriveStatus(f: Record<string, string>, company: WorkflowCompany): string {
+  return deriveStatusFromFields(f, company);
 }
 
 function Field({ label, val }: { label: string; val: React.ReactNode }) {
   return (
-    <div>
-      <div className="text-[11px] uppercase text-slate-500">{label}</div>
-      <div className="font-medium text-slate-900">{val ?? <span className="text-slate-300">—</span>}</div>
+    <div className="po-drawer-field">
+      <div className="po-drawer-field-label">{label}</div>
+      <div className="po-drawer-field-value">{val ?? <span className="text-slate-300">—</span>}</div>
     </div>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="border border-slate-200 rounded-md p-3">
-      <div className="text-xs font-semibold text-slate-500 uppercase mb-2">{title}</div>
-      <div className="grid grid-cols-2 gap-2 text-sm">{children}</div>
+    <div className="po-drawer-section">
+      <div className="po-drawer-section-title">{title}</div>
+      <div className="po-drawer-section-grid">{children}</div>
     </div>
   );
 }
+
+type DrawerTab = "summary" | "progress" | "details" | "history";
+
+const DRAWER_TABS: { id: DrawerTab; label: string }[] = [
+  { id: "summary", label: "Summary" },
+  { id: "progress", label: "Progress" },
+  { id: "details", label: "Details" },
+  { id: "history", label: "History" },
+];
 
 type LineForm = Record<string, string>;
 
@@ -118,14 +119,17 @@ function toStr(v: unknown): string {
 }
 
 export default function PoDrawer({ po, user, master, onClose, onUpdated, onDeleted, canEdit }: Props) {
+  const company = (po.company ?? "UFP") as WorkflowCompany;
+  const poRec = po as unknown as Record<string, unknown>;
   const pipelineStatus = resolvePipelineStatus(po.status);
-  const nextStage = STAGES[stageIndex(pipelineStatus, STAGES) + 1];
+  const allowedStages = getAllowedAdvanceStages(company, poRec).filter((s) =>
+    canAdvanceStage(user, s),
+  );
   const canStep =
     po.status !== PI_REJECTED_STATUS &&
     po.status !== CI_REJECTED_STATUS &&
-    nextStage &&
-    canAdvanceStage(user, nextStage);
-  const canEditProductionActualsPo = canEditProductionActualsForPo(user, pipelineStatus);
+    allowedStages.length > 0;
+  const canEditProductionActualsPo = canEditProductionActualsForPo(user, pipelineStatus, company, poRec);
   const canDeletePo = canManageUsers(user);
   const showRejectPi = canRejectPiRole(user.role) && po.status === PI_PENDING_STATUS;
   const showResubmitPi = canResubmitPiRole(user.role) && po.status === PI_REJECTED_STATUS;
@@ -153,6 +157,14 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const [lines, setLines] = useState<LineForm[]>([]);
   const [autoStatus, setAutoStatus] = useState(true);
   const [stockingLocations, setStockingLocations] = useState<{ name: string; email: string | null }[]>([]);
+  const [tab, setTab] = useState<DrawerTab>("summary");
+  const [editStageId, setEditStageId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTab("summary");
+    setEditing(false);
+    setEditStageId(null);
+  }, [po.id]);
 
   useEffect(() => {
     api.getReference().then((ref) => setStockingLocations(ref.stockingLocations));
@@ -163,7 +175,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const updateField = (k: string, v: string) => {
     setForm((prev) => {
       const next = { ...prev, [k]: v };
-      if (autoStatus && MILESTONE_KEYS.has(k)) next.status = deriveStatus(next);
+      if (autoStatus && MILESTONE_KEYS.has(k)) next.status = deriveStatus(next, company);
       return next;
     });
   };
@@ -223,6 +235,13 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
         else delete row.id;
         return row;
       });
+      // Keep dual values in sync with line Ext (PO) / Ext (Inv)
+      const sumPo = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+      const sumInv = lines.reduce((s, l) => s + (Number(l.extInv) || 0), 0);
+      if (!form.poValue && sumPo) payload.poValue = Math.round(sumPo * 100) / 100;
+      if (sumInv) payload.grossInvoiceValue = Math.round(sumInv * 100) / 100;
+      else if (form.grossInvoiceValue === "") payload.grossInvoiceValue = null;
+      if (!form.priority) payload.priority = "Standard";
       const { po: updated } = await api.updateOrder(po.id, payload);
       onUpdated(updated);
       setEditing(false);
@@ -242,68 +261,98 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
 
   const stagePill = (s: string) => {
     const cls = STAGE_COLORS[s] || "bg-slate-100 text-slate-700";
-    return <span className={`stage-pill ${cls}`}>{s}</span>;
+    const label = getSubstageLabel(company, s);
+    return <span className={`stage-pill ${cls}`}>{label}</span>;
   };
+
+  const showActuals = !!po.productionComplete || po.lines.some(lineHasActuals);
+  const showLineNotes = po.lines.some((l) => l.actualNotes?.trim());
 
   return (
     <>
       <div className="fixed inset-0 bg-black/30 z-40" onClick={editing ? undefined : onClose} />
-      <aside className="fixed top-0 right-0 h-full w-[860px] max-w-full bg-white shadow-2xl z-50 overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center gap-3 z-10">
-          <div>
-            <div className="text-xs text-slate-500">PO Number</div>
-            <div className="font-mono font-bold text-lg">
-              {po.poNo}
-              <span className="text-sm text-slate-400 ml-2">rev {po.rev || 0}</span>
+      <aside className="po-drawer fixed top-0 right-0 h-full w-[860px] max-w-full bg-white shadow-2xl z-50 flex flex-col">
+        <div className="po-drawer-header sticky top-0 bg-white border-b border-slate-200 px-5 py-3.5 z-10 shrink-0">
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-mono font-bold text-lg text-slate-900 truncate">{po.poNo}</h2>
+                <span className="text-xs text-slate-400">rev {po.rev || 0}</span>
+                {!editing && stagePill(po.status)}
+                {!editing && <ResubmitTag po={po} kind="pi" />}
+                {!editing && <ResubmitTag po={po} kind="ci" />}
+              </div>
+              {!editing && (
+                <p className="text-sm text-slate-500 mt-1 truncate">
+                  {[po.stockingLocation, po.portOfDest].filter(Boolean).join(" · ") || "No location set"}
+                  <span className="mx-1.5 text-slate-300">·</span>
+                  <span className={po.priority === "High" ? "text-amber-700 font-medium" : ""}>
+                    {po.priority || "Standard"}
+                  </span>
+                </p>
+              )}
+              {editing && <p className="text-sm text-indigo-600 mt-1 font-medium">Editing all fields</p>}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {canEdit && !editing && (
+                <button
+                  type="button"
+                  onClick={startEdit}
+                  className="px-3 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 font-medium"
+                >
+                  Edit
+                </button>
+              )}
+              {canDeletePo && onDeleted && !editing && (
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => void handleDelete()}
+                  className="px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded-md hover:bg-red-50 font-medium disabled:opacity-50"
+                >
+                  {deleting ? "Deleting…" : "Delete"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={editing ? () => setEditing(false) : onClose}
+                className="po-drawer-close"
+                aria-label={editing ? "Cancel editing" : "Close"}
+              >
+                ×
+              </button>
             </div>
           </div>
-          <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
-            {!editing && (
-              <>
-                {stagePill(po.status)}
-                <ResubmitTag po={po} kind="pi" />
-                <ResubmitTag po={po} kind="ci" />
-              </>
-            )}
-            {canEdit && !editing && (
-              <button
-                type="button"
-                onClick={startEdit}
-                className="px-3 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 font-medium"
-              >
-                Edit
-              </button>
-            )}
-            {canDeletePo && onDeleted && !editing && (
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => void handleDelete()}
-                className="px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded-md hover:bg-red-50 font-medium disabled:opacity-50"
-              >
-                {deleting ? "Deleting…" : "Delete"}
-              </button>
-            )}
-            {editing && <span className="text-sm font-medium text-indigo-600">Editing all fields</span>}
-            <button
-              type="button"
-              onClick={editing ? () => setEditing(false) : onClose}
-              className="text-slate-400 hover:text-slate-700 text-xl"
-            >
-              ×
-            </button>
-          </div>
+
+          {!editing && (
+            <nav className="po-drawer-tabs" aria-label="Order sections">
+              {DRAWER_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`po-drawer-tab${tab === t.id ? " is-active" : ""}`}
+                  onClick={() => setTab(t.id)}
+                >
+                  {t.label}
+                  {t.id === "history" && po.history.length > 0 ? (
+                    <span className="po-drawer-tab-count">{po.history.length}</span>
+                  ) : null}
+                </button>
+              ))}
+            </nav>
+          )}
         </div>
 
+        <div className="po-drawer-body flex-1 overflow-y-auto">
         {editing ? (
-          <div className="px-6 py-5 space-y-4">
+          <div className="px-5 py-4 space-y-4">
             {editSections.map((sec) => (
-              <div key={sec.title} className="border border-slate-200 rounded-md p-3">
-                <div className="text-xs font-semibold text-slate-500 uppercase mb-2">{sec.title}</div>
+              <div key={sec.title} className="border border-slate-200 rounded-lg p-3">
+                <div className="text-sm font-semibold text-slate-700 mb-2">{sec.title}</div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   {sec.fields.map((fld) => (
                     <div key={fld.k as string}>
-                      <label className="text-[11px] text-slate-500 block mb-0.5">{fld.label}</label>
+                      <label className="text-xs text-slate-500 block mb-0.5">{fld.label}</label>
                       {fld.type === "bool" ? (
                         <select
                           className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
@@ -336,7 +385,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                                 checked={autoStatus}
                                 onChange={(e) => {
                                   setAutoStatus(e.target.checked);
-                                  if (e.target.checked) setForm((prev) => ({ ...prev, status: deriveStatus(prev) }));
+                                  if (e.target.checked) setForm((prev) => ({ ...prev, status: deriveStatus(prev, company) }));
                                 }}
                               />
                               Auto-set from milestones
@@ -357,8 +406,8 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
               </div>
             ))}
 
-            <div className="border border-slate-200 rounded-md p-3">
-              <label className="text-xs font-semibold text-slate-500 uppercase mb-1 block">Notes</label>
+            <div className="border border-slate-200 rounded-lg p-3">
+              <label className="text-sm font-semibold text-slate-700 mb-1 block">Notes</label>
               <textarea
                 className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
                 rows={2}
@@ -367,9 +416,9 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
               />
             </div>
 
-            <div className="border border-slate-200 rounded-md p-3">
+            <div className="border border-slate-200 rounded-lg p-3">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-xs font-semibold text-slate-500 uppercase">Line Items ({lines.length})</div>
+                <div className="text-sm font-semibold text-slate-700">Line items ({lines.length})</div>
                 <button
                   type="button"
                   onClick={addLine}
@@ -421,222 +470,297 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
           </div>
         ) : (
           <>
-            <div className="px-6 pt-4 flex">
-              {STAGES.map((s) => {
-                const i = STAGES.indexOf(s);
-                const cur = pipelineStepIndex(po.status);
-                const cls = i < cur ? "done" : i === cur ? "current" : "";
-                return (
-                  <div key={s} className={`pipeline-step ${cls}`}>
-                    {s}
+            {(po.status === PI_REJECTED_STATUS && po.piRejectedNote) ||
+            (po.status === CI_REJECTED_STATUS && po.ciRejectedNote) ? (
+              <div className="px-5 pt-4">
+                {po.status === PI_REJECTED_STATUS && po.piRejectedNote && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm mb-3">
+                    <div className="text-xs font-semibold text-red-700 mb-1">PI rejected — manager note</div>
+                    <p className="text-red-900 whitespace-pre-wrap">{po.piRejectedNote}</p>
                   </div>
-                );
-              })}
-            </div>
+                )}
+                {po.status === CI_REJECTED_STATUS && po.ciRejectedNote && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
+                    <div className="text-xs font-semibold text-red-700 mb-1">CI rejected — finance note</div>
+                    <p className="text-red-900 whitespace-pre-wrap">{po.ciRejectedNote}</p>
+                  </div>
+                )}
+              </div>
+            ) : null}
 
-            {po.status === PI_REJECTED_STATUS && po.piRejectedNote && (
-              <div className="px-6 pt-4">
-                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm">
-                  <div className="text-xs font-semibold uppercase text-red-700 mb-1">PI rejected — manager note</div>
-                  <p className="text-red-900 whitespace-pre-wrap">{po.piRejectedNote}</p>
+            {tab === "summary" && (
+              <>
+                <PipelineProgress company={company} status={po.status} po={po} compact />
+                <button
+                  type="button"
+                  className="po-drawer-link-btn"
+                  onClick={() => setTab("progress")}
+                >
+                  View full timeline →
+                </button>
+
+                <div className="px-5 pb-2">
+                  <div className="po-drawer-summary-grid">
+                    <Field label="PO date" val={fmtDate(po.poDate)} />
+                    <Field
+                      label="Priority"
+                      val={
+                        <span className={po.priority === "High" ? "text-amber-800 font-semibold" : undefined}>
+                          {po.priority || "Standard"}
+                        </span>
+                      }
+                    />
+                    <Field label="PO value (sq ft)" val={fmtMoney(po.poValue)} />
+                    <Field label="Gross invoice (m²)" val={fmtMoney(resolveGrossInvoiceValue(po))} />
+                    <Field label="Total M²" val={fmtNum(po.totalM2, 2)} />
+                    <Field label="Skids" val={po.skids} />
+                    <Field label="Production site" val={po.productionSite || "—"} />
+                    <Field label="Active" val={po.active ? "Yes" : "No"} />
+                  </div>
                 </div>
-              </div>
-            )}
 
-            {po.status === CI_REJECTED_STATUS && po.ciRejectedNote && (
-              <div className="px-6 pt-4">
-                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm">
-                  <div className="text-xs font-semibold uppercase text-red-700 mb-1">CI rejected — finance note</div>
-                  <p className="text-red-900 whitespace-pre-wrap">{po.ciRejectedNote}</p>
-                </div>
-              </div>
-            )}
-
-            <div className="px-6 py-5 grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-              <Field label="Stocking location" val={po.stockingLocation} />
-              <Field label="Port of destination" val={po.portOfDest} />
-              <Field label="PO Date" val={fmtDate(po.poDate)} />
-              <Field label="Active" val={po.active ? "Yes" : "No"} />
-              <Field label="Total M²" val={fmtNum(po.totalM2, 2)} />
-              <Field label="Skids" val={po.skids} />
-              <Field label="PO Value" val={fmtMoney(po.poValue)} />
-              <Field label="Production site" val={po.productionSite || "—"} />
-            </div>
-
-            <div className="px-6 pb-4">
-              <div className="text-xs font-semibold text-slate-500 uppercase mb-2">
-                Line items ({po.lines.length})
-              </div>
-              {(() => {
-                const showActuals =
-                  !!po.productionComplete || po.lines.some(lineHasActuals);
-                const showLineNotes = po.lines.some((l) => l.actualNotes?.trim());
-                return (
-              <div className="border border-slate-200 rounded-md overflow-x-auto">
-                <table className="tbl w-full table-fixed min-w-[640px]">
-                  <thead>
-                    <tr>
-                      <th className="w-8">#</th>
-                      <th className="w-[14%]">Part #</th>
-                      <th className="w-[12%]">Size</th>
-                      <th className="w-[12%]">Color</th>
-                      <th className="text-right w-14">Sheets</th>
-                      <th className="text-right w-14">M²</th>
-                      {showActuals && (
-                        <>
-                          <th className="text-right w-16">Actual sheets</th>
-                          <th className="text-right w-14">Actual M²</th>
-                          <th className="text-right w-14">Actual skids</th>
-                        </>
-                      )}
-                      {showLineNotes && <th className="w-[22%]">Line notes</th>}
-                      <th className="text-right w-16">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {po.lines.map((l) => {
-                      const lineNote = l.actualNotes?.trim();
-                      return (
-                      <tr key={l.lineNo}>
-                        <td>{l.lineNo}</td>
-                        <td className="font-mono truncate" title={l.partNo ?? undefined}>{l.partNo}</td>
-                        <td className="truncate" title={l.size ?? undefined}>{l.size}</td>
-                        <td className="truncate" title={l.color ?? undefined}>{l.color}</td>
-                        <td className="text-right">{fmtNum(l.sheets, 0)}</td>
-                        <td className="text-right">{fmtNum(l.qtyM2, 2)}</td>
-                        {showActuals && (
-                          <>
-                            <td className="text-right">
-                              <ActualQtyCell actual={l.actualSheets} ordered={l.sheets} decimals={0} />
-                            </td>
-                            <td className="text-right">
-                              <ActualQtyCell actual={l.actualQtyM2} ordered={l.qtyM2} decimals={2} />
-                            </td>
-                            <td className="text-right">
-                              {l.actualSkids != null ? (
-                                <span className="inline-block px-1.5 py-0.5 rounded bg-slate-50 border border-slate-200">
-                                  {fmtNum(l.actualSkids, 0)}
-                                </span>
-                              ) : (
-                                <span className="text-slate-300">—</span>
+                <div className="px-5 pb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold text-slate-800">
+                      Line items
+                      <span className="ml-1.5 text-slate-400 font-normal">{po.lines.length}</span>
+                    </div>
+                  </div>
+                  <div className="border border-slate-200 rounded-lg overflow-x-auto">
+                    <table className="tbl w-full table-fixed min-w-[640px]">
+                      <thead>
+                        <tr>
+                          <th className="w-8">#</th>
+                          <th className="w-[14%]">Part #</th>
+                          <th className="w-[12%]">Size</th>
+                          <th className="w-[12%]">Color</th>
+                          <th className="text-right w-14">Sheets</th>
+                          <th className="text-right w-14">M²</th>
+                          <th className="w-24">Price as of</th>
+                          {showActuals && (
+                            <>
+                              <th className="text-right w-16">Actual sheets</th>
+                              <th className="text-right w-14">Actual M²</th>
+                              <th className="text-right w-14">Actual skids</th>
+                            </>
+                          )}
+                          {showLineNotes && <th className="w-[22%]">Line notes</th>}
+                          <th className="text-right w-16">Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {po.lines.map((l) => {
+                          const lineNote = l.actualNotes?.trim();
+                          return (
+                            <tr key={l.lineNo}>
+                              <td>{l.lineNo}</td>
+                              <td className="font-mono truncate" title={l.partNo ?? undefined}>{l.partNo}</td>
+                              <td className="truncate" title={l.size ?? undefined}>{l.size}</td>
+                              <td className="truncate" title={l.color ?? undefined}>{l.color}</td>
+                              <td className="text-right">{fmtNum(l.sheets, 0)}</td>
+                              <td className="text-right">{fmtNum(l.qtyM2, 2)}</td>
+                              <td className="text-slate-500 whitespace-nowrap text-[11px]" title={l.priceEffectiveFrom ? `Catalog from ${l.priceEffectiveFrom}` : undefined}>
+                                {l.priceAsOf || "—"}
+                                {l.priceEffectiveFrom ? (
+                                  <span className="text-slate-400"> · from {l.priceEffectiveFrom}</span>
+                                ) : null}
+                              </td>
+                              {showActuals && (
+                                <>
+                                  <td className="text-right">
+                                    <ActualQtyCell actual={l.actualSheets} ordered={l.sheets} decimals={0} />
+                                  </td>
+                                  <td className="text-right">
+                                    <ActualQtyCell actual={l.actualQtyM2} ordered={l.qtyM2} decimals={2} />
+                                  </td>
+                                  <td className="text-right">
+                                    {l.actualSkids != null ? (
+                                      <span className="inline-block px-1.5 py-0.5 rounded bg-slate-50 border border-slate-200">
+                                        {fmtNum(l.actualSkids, 0)}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-300">—</span>
+                                    )}
+                                  </td>
+                                </>
                               )}
-                            </td>
-                          </>
-                        )}
-                        {showLineNotes && (
-                          <td className="text-slate-600">
-                            {lineNote ? (
-                              <span
-                                className="block line-clamp-2 break-all text-[11px] leading-snug"
-                                title={lineNote}
-                              >
-                                {lineNote}
-                              </span>
-                            ) : (
-                              <span className="text-slate-300">—</span>
-                            )}
-                          </td>
-                        )}
-                        <td className="text-right">{fmtMoney(l.extPo)}</td>
-                      </tr>
-                    );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-                );
-              })()}
-            </div>
+                              {showLineNotes && (
+                                <td className="text-slate-600">
+                                  {lineNote ? (
+                                    <span
+                                      className="block line-clamp-2 break-all text-[11px] leading-snug"
+                                      title={lineNote}
+                                    >
+                                      {lineNote}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-300">—</span>
+                                  )}
+                                </td>
+                              )}
+                              <td className="text-right">{fmtMoney(l.extPo)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
 
-            <div className="px-6 pb-4 grid grid-cols-2 gap-4">
-              <Section title="PI Generated">
-                <Field label="PI #" val={po.piNo} />
-                <Field label="PI Date" val={po.piDate} />
-                <Field label="PI Value" val={fmtMoney(po.piValue)} />
-                <Field label="PI Approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
-                {po.piNo && (
-                  <div className="mt-2">
-                    <PiPdfDownload poId={po.id} />
-                  </div>
-                )}
-              </Section>
-              <Section title="Downpayment">
-                <Field label="DP Date" val={po.dpDate} />
-                <Field label="DP Amount" val={fmtMoney(po.dpAmount)} />
-              </Section>
-              <Section title="Production">
-                <Field label="Site" val={po.productionSite} />
-                <Field label="Start" val={po.productionStart} />
-                <Field label="ETC" val={po.productionEtc} />
-                <Field label="Complete" val={po.productionComplete} />
-                {po.productionNotes && (
-                  <div className="col-span-2">
-                    <Field label="Quality notes" val={po.productionNotes} />
-                  </div>
-                )}
-              </Section>
-              <Section title="Container & Shipping">
-                <Field label="Container #" val={po.containerNo} />
-                <Field label="ETD" val={po.actualDeparture} />
-                <Field label="ETA" val={po.shippingEta} />
-                <Field label="ISF" val={po.isf} />
-              </Section>
-              <Section title="BL">
-                <Field label="BOL / SWBOL" val={po.bol} />
-                <Field label="Shipping line" val={po.shippingLine} />
-                <Field
-                  label="Tracking"
-                  val={
-                    po.shippingUrl ? (
-                      <a
-                        href={po.shippingUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-indigo-600 hover:underline break-all"
-                      >
-                        {po.shippingUrl}
-                      </a>
-                    ) : null
-                  }
+                <StockingEmailQueue
+                  po={po}
+                  user={user}
+                  locations={stockingLocations}
+                  onUpdated={onUpdated}
                 />
-              </Section>
-              <Section title="CI sent">
-                <Field label="CI #" val={po.ciNo} />
-                <Field label="CI Date" val={po.ciDate} />
-                <Field label="CI Value" val={fmtMoney(po.ciValue)} />
-                <Field label="Balance due" val={fmtMoney(po.balanceDue)} />
-                <Field label="CI Approved" val={po.ciApprovedDate ? fmtDate(po.ciApprovedDate) : null} />
-              </Section>
-            </div>
+                <PiEmailQueue po={po} user={user} master={master} onUpdated={onUpdated} />
+              </>
+            )}
 
-            <StockingEmailQueue
-              po={po}
-              user={user}
-              locations={stockingLocations}
-              onUpdated={onUpdated}
-            />
-
-            <div className="px-6 pb-4">
-              <div className="text-xs font-semibold text-slate-500 uppercase mb-2">History</div>
-              <div className="border border-slate-200 rounded-md p-3 text-xs max-h-40 overflow-y-auto bg-slate-50">
-                {po.history.map((h) => (
-                  <div key={h.id} className="flex justify-between gap-3 py-0.5">
-                    <span>
-                      <b>{h.stage}</b> — {h.note || ""}
-                    </span>
-                    <span className="text-slate-500">
-                      {h.at} · {h.user?.name || "—"}
-                    </span>
-                  </div>
-                ))}
+            {tab === "progress" && (
+              <div className="pt-2 pb-4">
+                <PipelineProgress
+                  company={company}
+                  status={po.status}
+                  po={po}
+                  canEditStages={canEdit}
+                  onSelectStage={(stageId) => setEditStageId(stageId)}
+                />
               </div>
-            </div>
+            )}
+
+            {tab === "details" && (
+              <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Section title="Proforma invoice">
+                  <Field label="PI #" val={po.piNo} />
+                  <Field label="PI date" val={po.piDate} />
+                  <Field label="PI value" val={fmtMoney(po.piValue)} />
+                  <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
+                  {po.piNo && (
+                    <div className="col-span-2 mt-1 flex flex-wrap gap-2">
+                      <PiPdfDownload poId={po.id} />
+                    </div>
+                  )}
+                </Section>
+                <Section title="Downpayment">
+                  <Field label="DP date" val={po.dpDate} />
+                  <Field label="DP amount" val={fmtMoney(po.dpAmount)} />
+                  {(() => {
+                    const flag = downpaymentFlag(po, master.downpaymentPct ?? 0.5);
+                    if (!flag || flag.kind === "ok") return null;
+                    return (
+                      <div className="col-span-2">
+                        <Field
+                          label="Payment check"
+                          val={
+                            <span
+                              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
+                            >
+                              {flag.label} · expected {fmtMoney(flag.expected)} · variance {fmtMoney(flag.variance)}
+                            </span>
+                          }
+                        />
+                      </div>
+                    );
+                  })()}
+                </Section>
+                <Section title="Production">
+                  <Field label="Site" val={po.productionSite} />
+                  <Field label="Start" val={po.productionStart} />
+                  <Field label="ETC" val={po.productionEtc} />
+                  <Field label="Complete" val={po.productionComplete} />
+                  {po.productionNotes && (
+                    <div className="col-span-2">
+                      <Field label="Quality notes" val={po.productionNotes} />
+                    </div>
+                  )}
+                </Section>
+                <Section title="Container & shipping">
+                  <Field label="Container #" val={po.containerNo} />
+                  <Field label="ETD" val={po.actualDeparture} />
+                  <Field label="ETA" val={po.shippingEta} />
+                  <Field label="ISF" val={po.isf} />
+                </Section>
+                <Section title="Bill of lading">
+                  <Field label="BOL / SWBOL" val={po.bol} />
+                  <Field label="Shipping line" val={po.shippingLine} />
+                  <Field
+                    label="Tracking"
+                    val={
+                      po.shippingUrl ? (
+                        <a
+                          href={po.shippingUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-indigo-600 hover:underline break-all"
+                        >
+                          Open tracking
+                        </a>
+                      ) : null
+                    }
+                  />
+                </Section>
+                <Section title="Commercial invoice">
+                  <Field label="CI #" val={po.ciNo} />
+                  <Field label="CI date" val={po.ciDate} />
+                  <Field label="CI value" val={fmtMoney(po.ciValue)} />
+                  <Field label="Balance due" val={fmtMoney(po.balanceDue)} />
+                  <Field label="CI approved" val={po.ciApprovedDate ? fmtDate(po.ciApprovedDate) : null} />
+                  {po.ciNo && (
+                    <div className="col-span-2 mt-1">
+                      <CiExcelDownload poId={po.id} />
+                    </div>
+                  )}
+                  <Field label="BP date" val={po.bpDate} />
+                  <Field label="BP amount" val={fmtMoney(po.bpAmount)} />
+                  {(() => {
+                    const flag = balancePaymentFlag(po);
+                    if (!flag || flag.kind === "ok") return null;
+                    return (
+                      <div className="col-span-2">
+                        <Field
+                          label="Payment check"
+                          val={
+                            <span
+                              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
+                            >
+                              {flag.label} · expected {fmtMoney(flag.expected)} · variance {fmtMoney(flag.variance)}
+                            </span>
+                          }
+                        />
+                      </div>
+                    );
+                  })()}
+                </Section>
+              </div>
+            )}
+
+            {tab === "history" && (
+              <div className="px-5 py-4">
+                {po.history.length === 0 ? (
+                  <p className="text-sm text-slate-500">No history yet.</p>
+                ) : (
+                  <ol className="po-drawer-history">
+                    {po.history.map((h) => (
+                      <li key={h.id} className="po-drawer-history-item">
+                        <div className="po-drawer-history-stage">{h.stage}</div>
+                        {h.note ? <div className="po-drawer-history-note">{h.note}</div> : null}
+                        <div className="po-drawer-history-meta">
+                          {h.at} · {h.user?.name || "—"}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
           </>
         )}
+        </div>
 
-        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-3 flex items-center gap-2">
+        <div className="sticky bottom-0 bg-slate-50/95 backdrop-blur border-t border-slate-200 px-5 py-3.5 shrink-0">
           {editing ? (
-            <div className="flex items-center gap-2 ml-auto">
+            <div className="flex items-center gap-2 justify-end">
               <button
                 type="button"
                 onClick={() => setEditing(false)}
@@ -654,85 +778,115 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
               </button>
             </div>
           ) : (
-            <>
-              {showResubmitPi && (
-                <ResubmitPiButton
-                  po={po}
-                  onUpdated={(updated) => {
-                    onUpdated(updated);
-                    notifyPoUpdated();
-                  }}
-                />
-              )}
-              {showResubmitCi && (
-                <ResubmitCiButton
-                  po={po}
-                  onUpdated={(updated) => {
-                    onUpdated(updated);
-                    notifyPoUpdated();
-                  }}
-                />
-              )}
-              {showRejectPi && canStep && nextStage === "PI Approved" && (
-                <RejectPiButton
-                  po={po}
-                  onUpdated={(updated) => {
-                    onUpdated(updated);
-                    notifyPoUpdated();
-                  }}
-                />
-              )}
-              {showRejectCi && canStep && nextStage === "CI approved" && (
-                <RejectCiButton
-                  po={po}
-                  onUpdated={(updated) => {
-                    onUpdated(updated);
-                    notifyPoUpdated();
-                  }}
-                />
-              )}
-              {!editing && canEditProductionActualsPo && (
-                <ProductionActualsEditTrigger
-                  po={po}
-                  onUpdated={(updated) => {
-                    onUpdated(updated);
-                    notifyPoUpdated();
-                  }}
-                />
-              )}
-              {canStep ? (
-                nextStage === "Production Complete" ? (
-                  <ProductionCompleteTrigger
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {showResubmitPi && (
+                  <ResubmitPiButton
                     po={po}
                     onUpdated={(updated) => {
                       onUpdated(updated);
                       notifyPoUpdated();
                     }}
                   />
-                ) : (
-                  <AdvanceButton po={po} nextStage={nextStage} master={master} onUpdated={onUpdated} />
-                )
+                )}
+                {showResubmitCi && (
+                  <ResubmitCiButton
+                    po={po}
+                    onUpdated={(updated) => {
+                      onUpdated(updated);
+                      notifyPoUpdated();
+                    }}
+                  />
+                )}
+                {showRejectPi && allowedStages.includes("PI Approved") && (
+                  <RejectPiButton
+                    po={po}
+                    onUpdated={(updated) => {
+                      onUpdated(updated);
+                      notifyPoUpdated();
+                    }}
+                  />
+                )}
+                {showRejectCi && allowedStages.includes("CI approved") && (
+                  <RejectCiButton
+                    po={po}
+                    onUpdated={(updated) => {
+                      onUpdated(updated);
+                      notifyPoUpdated();
+                    }}
+                  />
+                )}
+                {!editing && canEditProductionActualsPo && (
+                  <ProductionActualsEditTrigger
+                    po={po}
+                    onUpdated={(updated) => {
+                      onUpdated(updated);
+                      notifyPoUpdated();
+                    }}
+                  />
+                )}
+              </div>
+
+              {canStep ? (
+                <PipelineStepActions
+                  company={company}
+                  allowedStages={allowedStages}
+                  renderProductionComplete={() => (
+                    <ProductionCompleteTrigger
+                      po={po}
+                      onUpdated={(updated) => {
+                        onUpdated(updated);
+                        notifyPoUpdated();
+                      }}
+                    />
+                  )}
+                  renderAdvance={({ stage, compact, label }) => (
+                    <AdvanceButton
+                      po={po}
+                      nextStage={stage}
+                      master={master}
+                      company={company}
+                      onUpdated={onUpdated}
+                      compact={compact}
+                      buttonLabel={label}
+                    />
+                  )}
+                />
               ) : po.status === PI_REJECTED_STATUS ? (
-                <span className="text-xs text-slate-500">
+                <p className="text-sm text-slate-600">
                   {showResubmitPi
-                    ? "Update PI fields if needed, then resubmit for manager approval."
+                    ? "PI rejected — update fields if needed, then resubmit for manager approval."
                     : "PI rejected — awaiting maintainer fixes."}
-                </span>
+                </p>
               ) : po.status === CI_REJECTED_STATUS ? (
-                <span className="text-xs text-slate-500">
+                <p className="text-sm text-slate-600">
                   {showResubmitCi
-                    ? "Update CI fields if needed, then resubmit for finance approval."
+                    ? "CI rejected — update fields if needed, then resubmit for finance approval."
                     : "CI rejected — awaiting maintainer fixes."}
-                </span>
-              ) : nextStage ? (
-                <span className="text-sm text-slate-600">{waitingForStageMessage(nextStage)}</span>
+                </p>
+              ) : getAllowedAdvanceStages(company, poRec).length > 0 ? (
+                <p className="text-sm text-slate-600">
+                  {waitingForStageMessage(getAllowedAdvanceStages(company, poRec)[0])}
+                </p>
               ) : (
-                <span className="text-sm text-emerald-700">Order complete · Arrived {po.arrivalDate || ""}</span>
+                <p className="text-sm font-medium text-emerald-700">
+                  Order complete{po.arrivalDate ? ` · Arrived ${po.arrivalDate}` : ""}
+                </p>
               )}
-            </>
+            </div>
           )}
         </div>
       </aside>
+      {editStageId && canEdit && (
+        <StageMilestoneEditor
+          po={po}
+          stageId={editStageId}
+          master={master}
+          company={company}
+          onClose={() => setEditStageId(null)}
+          onUpdated={onUpdated}
+        />
+      )}
     </>
   );
 }
@@ -756,12 +910,18 @@ function buildInitialAdvanceFields(
     else if (f.def != null && f.def !== "") out[f.k] = String(f.def);
   }
 
+  if (nextStage === "Planning") {
+    if (!out.planningDate) out.planningDate = todayISO();
+  }
   if (nextStage === "PI Generated") {
     if (!out.piDate) out.piDate = todayISO();
     if (!out.piValue && po.poValue != null) out.piValue = String(po.poValue);
   }
   if (nextStage === "PI Approved") {
     if (!out.piApprovedDate) out.piApprovedDate = todayISO();
+  }
+  if (nextStage === "PI Sent") {
+    if (!out.piSent) out.piSent = todayISO();
   }
   if (nextStage === "Downpayment Received") {
     if (!out.dpDate) out.dpDate = todayISO();
@@ -775,6 +935,9 @@ function buildInitialAdvanceFields(
         }
       }
     }
+  }
+  if (nextStage === "Material Available") {
+    if (!out.allMaterialAvailable) out.allMaterialAvailable = todayISO();
   }
   if (nextStage === "In Production") {
     if (!out.productionStart) out.productionStart = todayISO();
@@ -791,6 +954,9 @@ function buildInitialAdvanceFields(
       if (po.productionEtc) out.productionEtc = advanceVal(po.productionEtc);
       else out.productionEtc = addWeeksISO(start, weeks);
     }
+  }
+  if (nextStage === "Shipped from Factory") {
+    if (!out.dispatchFromFactory) out.dispatchFromFactory = todayISO();
   }
   if (nextStage === "Container Loaded") {
     if (!out.actualDeparture) out.actualDeparture = todayISO();
@@ -809,6 +975,9 @@ function buildInitialAdvanceFields(
   }
   if (nextStage === "CI approved") {
     if (!out.ciApprovedDate) out.ciApprovedDate = todayISO();
+  }
+  if (nextStage === "CI Released") {
+    if (!out.revisionSent) out.revisionSent = todayISO();
   }
   if (nextStage === "Balance Payment Received") {
     if (!out.bpDate) out.bpDate = todayISO();
@@ -830,12 +999,18 @@ function AdvanceButton({
   po,
   nextStage,
   master,
+  company,
   onUpdated,
+  compact = false,
+  buttonLabel,
 }: {
   po: PurchaseOrder;
   nextStage: string;
   master: MasterData;
+  company: WorkflowCompany;
   onUpdated: (po: PurchaseOrder) => void;
+  compact?: boolean;
+  buttonLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -867,6 +1042,11 @@ function AdvanceButton({
   };
 
   const stageFieldDefs: Record<string, { k: string; label: string; type: string; options?: string[]; def?: string | number; autoNo?: boolean; autoDate?: boolean }[]> = {
+    Planning: [
+      { k: "planningDate", label: "Planning date", type: "date", autoDate: true },
+      { k: "productionSite", label: "Production site", type: "select", options: master.uaeSites || [] },
+      { k: "stockingLocation", label: "Stocking location", type: "text" },
+    ],
     "PI Generated": [
       { k: "piNo", label: "PI Number", type: "text", autoNo: true },
       { k: "piDate", label: "PI Date", type: "date", autoDate: true },
@@ -875,14 +1055,27 @@ function AdvanceButton({
     "PI Approved": [
       { k: "piApprovedDate", label: "Approval Date", type: "date", autoDate: true },
     ],
+    "PI Sent": [
+      { k: "piSent", label: "PI sent date", type: "date", autoDate: true },
+    ],
     "Downpayment Received": [
       { k: "dpDate", label: "DP Date", type: "date", autoDate: true },
       { k: "dpAmount", label: "DP Amount (USD)", type: "number" },
+    ],
+    "Material Available": [
+      { k: "allMaterialAvailable", label: "Material available date", type: "date", autoDate: true },
     ],
     "In Production": [
       { k: "productionSite", label: "Production site", type: "select", options: master.uaeSites || [] },
       { k: "productionStart", label: "Production start", type: "date", autoDate: true },
       { k: "productionEtc", label: "Production ETC", type: "date" },
+    ],
+    "Production Complete": [
+      { k: "productionComplete", label: "Production complete date", type: "date", autoDate: true },
+    ],
+    "Shipped from Factory": [
+      { k: "dispatchFromFactory", label: "Shipped from factory date", type: "date", autoDate: true },
+      { k: "containerNo", label: "Container #", type: "text" },
     ],
     "Container Loaded": [
       { k: "containerNo", label: "Container #", type: "text" },
@@ -899,6 +1092,9 @@ function AdvanceButton({
     ],
     "CI approved": [
       { k: "ciApprovedDate", label: "Approval Date", type: "date", autoDate: true },
+    ],
+    "CI Released": [
+      { k: "revisionSent", label: "CI sent to customer", type: "text" },
     ],
     BL: [
       { k: "bol", label: "BOL / SWBOL #", type: "text" },
@@ -989,6 +1185,7 @@ function AdvanceButton({
   const approvePi = nextStage === "PI Approved";
   const approveCi = nextStage === "CI approved";
   const isApproval = approvePi || approveCi;
+  const stageLabel = buttonLabel ?? getSubstageLabel(company, nextStage);
 
   if (!open) {
     return (
@@ -997,21 +1194,32 @@ function AdvanceButton({
         onClick={() => void openDialog()}
         disabled={loading}
         className={`px-4 py-2 text-white text-sm rounded-md disabled:opacity-50 ${
+          compact ? "w-full text-left px-3 py-2" : ""
+        } ${
           isApproval ? "bg-green-600 hover:bg-green-700" : "bg-indigo-600 hover:bg-indigo-700"
         }`}
       >
-        {loading ? "Preparing…" : approvePi ? "Approve PI" : approveCi ? "Approve CI" : `Advance → ${nextStage}`}
+        {loading
+          ? "Preparing…"
+          : approvePi
+            ? "Approve PI"
+            : approveCi
+              ? "Approve CI"
+              : compact
+                ? stageLabel
+                : `Next: ${stageLabel}`}
       </button>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl w-[520px] max-w-full">
-        <div className="px-5 py-3 border-b border-slate-200 font-semibold">
-          {approvePi ? "Approve PI" : approveCi ? "Approve CI" : `Advance to: ${nextStage}`}
+    <ModalPortal>
+    <div className="fixed inset-0 bg-black/40 z-[80] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-[520px] max-w-full my-auto max-h-[min(90dvh,900px)] flex flex-col">
+        <div className="px-5 py-3 border-b border-slate-200 font-semibold shrink-0">
+          {approvePi ? "Approve PI" : approveCi ? "Approve CI" : `Record: ${stageLabel}`}
         </div>
-        <div className="p-5 space-y-3">
+        <div className="p-5 space-y-3 overflow-y-auto">
           {approvePi && (
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm space-y-1">
               <div className="text-xs font-semibold uppercase text-slate-500 mb-1">PI details</div>
@@ -1122,7 +1330,7 @@ function AdvanceButton({
             onChange={(e) => setNote(e.target.value)}
           />
         </div>
-        <div className="px-5 py-3 border-t border-slate-200 flex gap-2 justify-end">
+        <div className="px-5 py-3 border-t border-slate-200 flex gap-2 justify-end shrink-0">
           <button type="button" onClick={() => setOpen(false)} className="px-3 py-1.5 text-sm border border-slate-300 rounded-md">
             Cancel
           </button>
@@ -1139,6 +1347,7 @@ function AdvanceButton({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -1185,8 +1394,9 @@ function RejectPiButton({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full">
+    <ModalPortal>
+    <div className="fixed inset-0 bg-black/40 z-[80] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full my-auto">
         <div className="px-5 py-3 border-b border-slate-200 font-semibold text-red-800">Reject PI</div>
         <div className="p-5 space-y-3">
           <p className="text-sm text-slate-600">
@@ -1219,6 +1429,7 @@ function RejectPiButton({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -1260,8 +1471,9 @@ function ResubmitPiButton({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full">
+    <ModalPortal>
+    <div className="fixed inset-0 bg-black/40 z-[80] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full my-auto">
         <div className="px-5 py-3 border-b border-slate-200 font-semibold">Resubmit for approval</div>
         <div className="p-5 space-y-3">
           {po.piRejectedNote && (
@@ -1296,6 +1508,7 @@ function ResubmitPiButton({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -1342,8 +1555,9 @@ function RejectCiButton({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full">
+    <ModalPortal>
+    <div className="fixed inset-0 bg-black/40 z-[80] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full my-auto">
         <div className="px-5 py-3 border-b border-slate-200 font-semibold text-red-800">Reject CI</div>
         <div className="p-5 space-y-3">
           <p className="text-sm text-slate-600">
@@ -1376,6 +1590,7 @@ function RejectCiButton({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -1417,8 +1632,9 @@ function ResubmitCiButton({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full">
+    <ModalPortal>
+    <div className="fixed inset-0 bg-black/40 z-[80] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-[480px] max-w-full my-auto">
         <div className="px-5 py-3 border-b border-slate-200 font-semibold">Resubmit CI for approval</div>
         <div className="p-5 space-y-3">
           {po.ciRejectedNote && (
@@ -1453,6 +1669,7 @@ function ResubmitCiButton({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -1478,6 +1695,32 @@ function PiPdfDownload({ poId }: { poId: number }) {
       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 disabled:opacity-50"
     >
       {loading ? "Preparing…" : "Download PI PDF"}
+    </button>
+  );
+}
+
+function CiExcelDownload({ poId }: { poId: number }) {
+  const [loading, setLoading] = useState(false);
+
+  const download = async () => {
+    setLoading(true);
+    try {
+      await api.downloadCiExcel(poId);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to download CI Excel");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      disabled={loading}
+      onClick={() => void download()}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 disabled:opacity-50"
+    >
+      {loading ? "Preparing…" : "Download CI Excel"}
     </button>
   );
 }

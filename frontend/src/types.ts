@@ -1,30 +1,23 @@
-export const STAGES = [
-  "PO Received",
-  "PI Generated",
-  "PI Approved",
-  "Downpayment Received",
-  "In Production",
-  "Production Complete",
-  "Container Loaded",
-  "CI sent",
-  "CI approved",
-  "BL",
-  "Balance Payment Received",
-  "Telex / Seaway Released",
-  "Arrived",
-] as const;
+import { STAGES as WORKFLOW_STAGES } from "./workflows";
+
+export const STAGES = WORKFLOW_STAGES;
 
 export const STAGE_COLORS: Record<string, string> = {
   "PO Received": "bg-slate-100 text-slate-700",
+  Planning: "bg-indigo-100 text-indigo-800",
   "PI Generated": "bg-amber-100 text-amber-800",
   "PI Approved": "bg-green-100 text-green-800",
+  "PI Sent": "bg-amber-50 text-amber-900",
   "PI Rejected": "bg-red-100 text-red-800",
   "Downpayment Received": "bg-yellow-100 text-yellow-800",
+  "Material Available": "bg-orange-50 text-orange-900",
   "In Production": "bg-orange-100 text-orange-800",
   "Production Complete": "bg-teal-100 text-teal-800",
+  "Shipped from Factory": "bg-blue-50 text-blue-900",
   "Container Loaded": "bg-blue-100 text-blue-800",
   "CI sent": "bg-cyan-100 text-cyan-800",
   "CI approved": "bg-green-100 text-green-800",
+  "CI Released": "bg-cyan-50 text-cyan-900",
   "CI Rejected": "bg-red-100 text-red-800",
   BL: "bg-sky-100 text-sky-800",
   "Balance Payment Received": "bg-violet-100 text-violet-800",
@@ -82,6 +75,10 @@ export interface PoLine {
   extInv?: number | null;
   leadTime?: number | null;
   notes?: string | null;
+  /** Date used to look up catalog price (usually PO date) */
+  priceAsOf?: string | null;
+  /** Effective-from of the catalog price version applied */
+  priceEffectiveFrom?: string | null;
   actualQtyM2?: number | null;
   actualSheets?: number | null;
   actualSkids?: number | null;
@@ -111,6 +108,10 @@ export interface PurchaseOrder {
   stockingLocation?: string | null;
   portOfDest?: string | null;
   poValue?: number | null;
+  /** Gross invoice value based on m² / Ext Inv */
+  grossInvoiceValue?: number | null;
+  /** Standard (default) or High */
+  priority?: "Standard" | "High" | string | null;
   totalM2?: number | null;
   productionSite?: string | null;
   productionStart?: string | null;
@@ -149,6 +150,7 @@ export interface PurchaseOrder {
   telexDate?: string | null;
   bpToTelex?: number | null;
   arrivalDate?: string | null;
+  planningDate?: string | null;
   notes?: string | null;
   soNo?: string | null;
   standardColorsOnly?: string | null;
@@ -157,6 +159,7 @@ export interface PurchaseOrder {
   productionComplete?: string | null;
   dispatchFromFactory?: string | null;
   piSent?: string | null;
+  productionSequence?: number | null;
   productionStatus?: string | null;
   productionNotes?: string | null;
   stockingEmailSentAt?: string | null;
@@ -170,6 +173,8 @@ export interface MasterData {
   uaeSites?: string[];
   defaultProductionSite?: string;
   productionEtcWeeks?: number;
+  /** Comma-separated internal emails for PI distribution */
+  piInternalEmails?: string;
   portsOfEntry?: Record<string, string>;
   sailingDays?: Record<string, number>;
   freight?: number;
@@ -239,8 +244,33 @@ export interface ReferenceData {
     pricePerMsq: number | null;
     pricePerSheet: number | null;
     leadTimeDays: number | null;
+    effectiveFrom: string | null;
+    effectiveTo: string | null;
+    prices?: {
+      id: number;
+      pricePerSqft: number | null;
+      pricePerM2: number | null;
+      pricePerMsq: number | null;
+      pricePerSheet: number | null;
+      leadTimeDays: number | null;
+      effectiveFrom: string;
+      effectiveTo: string | null;
+      createdAt?: string;
+    }[];
   }[];
   config: AppConfigData | null;
+  capacityPeriods: CapacityPeriod[];
+}
+
+export interface CapacityPeriod {
+  id: number;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  label: string | null;
+  productionLines: number;
+  m2PerLinePerDay: number;
+  m2PerContainer: number;
+  workingDaysPerMonth: number;
 }
 
 export interface AppConfigData {

@@ -2,10 +2,25 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma, requireAuth, requirePage, requirePoEdit, requireStageAdvance, requireSuperAdmin, requireWrite } from "../middleware/auth.js";
-import { STAGES, canAdvanceStage, canRejectPi, canResubmitPi, canRejectCi, canResubmitCi, PI_REJECTED_STATUS, CI_PENDING_STATUS, CI_REJECTED_STATUS, canEditProductionActualsForPo, canMarkStockingEmailSent, isAtOrAfterCiSent } from "../constants.js";
+import {
+  canAdvanceStage,
+  canRejectPi,
+  canResubmitPi,
+  canRejectCi,
+  canResubmitCi,
+  PI_REJECTED_STATUS,
+  CI_PENDING_STATUS,
+  CI_REJECTED_STATUS,
+  canEditProductionActualsForPo,
+  canMarkStockingEmailSent,
+  isAtOrAfterCiSentForPo,
+} from "../constants.js";
+import { getAllowedAdvanceStages, deriveStatusFromFields } from "../workflows.js";
 import { parseCompany } from "../companies.js";
 import { nextCiNo, nextPiNo } from "../docNumbers.js";
 import { generatePiPdf } from "../piPdf.js";
+import { generateCiExcel } from "../ciExcel.js";
+import { recalculateProductionDates, type CapacityConfig } from "../productionSchedule.js";
 
 const router = Router();
 
@@ -95,6 +110,8 @@ const lineSchema = z.object({
   extInv: numField,
   leadTime: intField,
   notes: strField,
+  priceAsOf: strField,
+  priceEffectiveFrom: strField,
   actualQtyM2: numField,
   actualSheets: numField,
   actualSkids: numField,
@@ -113,6 +130,8 @@ const poSchema = z.object({
   stockingLocation: strField,
   portOfDest: strField,
   poValue: numField,
+  grossInvoiceValue: numField,
+  priority: z.enum(["Standard", "High"]).default("Standard").optional(),
   totalM2: numField,
   productionSite: strField,
   productionStart: strField,
@@ -151,6 +170,7 @@ const poSchema = z.object({
   telexDate: strField,
   bpToTelex: intField,
   arrivalDate: strField,
+  planningDate: strField,
   notes: strField,
   soNo: strField,
   standardColorsOnly: strField,
@@ -159,6 +179,7 @@ const poSchema = z.object({
   productionComplete: strField,
   dispatchFromFactory: strField,
   piSent: strField,
+  productionSequence: intField,
   productionStatus: strField,
   productionNotes: strField,
   lines: z.array(lineSchema).default([]),
@@ -187,11 +208,6 @@ function poCreateData(
 
 function poUpdateData(poData: Record<string, unknown>): Prisma.PurchaseOrderUpdateInput {
   return poData as Prisma.PurchaseOrderUpdateInput;
-}
-
-function stageIndex(s: string) {
-  const i = STAGES.indexOf(s as (typeof STAGES)[number]);
-  return i < 0 ? 0 : i;
 }
 
 router.get("/", requireAuth, requirePage("orders"), async (req, res) => {
@@ -239,6 +255,93 @@ router.get("/next-doc-no", requireAuth, requirePage("orders"), async (req, res) 
   res.json({ type: "pi", value: nextPiNo(piNos) });
 });
 
+const reorderSchema = z.object({
+  orderedIds: z.array(z.number().int()).min(1),
+});
+
+/** Renumber productionSequence (10, 20, 30…) from drag-and-drop order */
+router.post("/reorder-production", requireAuth, requirePage("production"), requirePoEdit, async (req, res) => {
+  const parsed = reorderSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const company = getCompany(req);
+  const ids = parsed.data.orderedIds;
+  const found = await prisma.purchaseOrder.findMany({
+    where: { company, id: { in: ids } },
+    select: { id: true },
+  });
+  if (found.length !== ids.length) {
+    return res.status(400).json({ error: "One or more POs not found for this company" });
+  }
+  await prisma.$transaction(
+    ids.map((id, idx) =>
+      prisma.purchaseOrder.update({
+        where: { id },
+        data: { productionSequence: (idx + 1) * 10 },
+      }),
+    ),
+  );
+  const pos = await prisma.purchaseOrder.findMany({
+    where: { company, id: { in: ids } },
+    include: poInclude,
+  });
+  const byId = new Map(pos.map((p) => [p.id, p]));
+  res.json({ pos: ids.map((id) => byId.get(id)!).filter(Boolean) });
+});
+
+/** Recalculate production begin/complete from priority, sequence, material date, capacity */
+router.post("/recalculate-production", requireAuth, requirePage("production"), requirePoEdit, async (req, res) => {
+  const company = getCompany(req);
+  try {
+    const [pos, periods, config, settings] = await Promise.all([
+      prisma.purchaseOrder.findMany({ where: { company }, include: poInclude }),
+      prisma.capacityPeriod.findMany({ orderBy: { effectiveFrom: "asc" } }),
+      prisma.appConfig.findUnique({ where: { id: 1 } }),
+      prisma.appSettings.findUnique({ where: { company } }),
+    ]);
+    const master = (settings?.master ?? {}) as Record<string, unknown>;
+    const fallback: CapacityConfig = {
+      lines: Number(config?.productionLines ?? master.productionLines) || 2,
+      m2PerLinePerDay: Number(config?.m2PerLinePerDay ?? master.m2PerLinePerDay) || 3000,
+      m2PerContainer: Number(config?.m2PerContainer ?? master.m2PerContainer) || 8300,
+      workingDaysPerMonth: Number(config?.workingDaysPerMonth ?? master.workingDaysPerMonth) || 26,
+    };
+    const updates = recalculateProductionDates(pos, periods, fallback, todayISO());
+    if (updates.length) {
+      await prisma.$transaction(
+        updates.flatMap((u) => [
+          prisma.purchaseOrder.update({
+            where: { id: u.id },
+            data: {
+              productionBegin: u.productionBegin,
+              productionComplete: u.productionComplete,
+              productionStart: u.productionStart,
+              productionEtc: u.productionEtc,
+            },
+          }),
+          prisma.poHistory.create({
+            data: {
+              poId: u.id,
+              stage: "Production schedule",
+              note: `Auto dates ${u.productionBegin} → ${u.productionComplete}`,
+              userId: req.user!.id,
+              byRole: req.user!.role,
+              at: todayISO(),
+            },
+          }),
+        ]),
+      );
+    }
+    const refreshed = await prisma.purchaseOrder.findMany({
+      where: { company },
+      include: poInclude,
+      orderBy: { id: "desc" },
+    });
+    res.json({ pos: refreshed, updatedCount: updates.length });
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : "Recalculate failed" });
+  }
+});
+
 router.get("/export", requireAuth, requirePage("orders"), async (req, res) => {
   const company = getCompany(req);
   const pos = await prisma.purchaseOrder.findMany({
@@ -270,6 +373,24 @@ router.get("/:id/pi-pdf", requireAuth, requirePage("orders"), async (req, res) =
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="PI-${safeName}.pdf"`);
   res.send(Buffer.from(pdfBytes));
+});
+
+router.get("/:id/ci-excel", requireAuth, requirePage("orders"), async (req, res) => {
+  const company = getCompany(req);
+  const id = Number(req.params.id);
+  const po = await findPoForCompany(id, company);
+  if (!po) return res.status(404).json({ error: "PO not found" });
+  if (!po.ciNo?.trim()) {
+    return res.status(400).json({ error: "CI number is required before downloading the commercial invoice" });
+  }
+  const excel = await generateCiExcel(po);
+  const safeName = po.ciNo.replace(/[/\\?%*:|"<>]/g, "-");
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  res.setHeader("Content-Disposition", `attachment; filename="CI-${safeName}.xlsx"`);
+  res.send(excel);
 });
 
 router.post("/", requireAuth, requirePage("upload"), requirePoEdit, async (req, res) => {
@@ -374,7 +495,7 @@ router.patch("/:id/production-actuals", requireAuth, requirePage("orders"), asyn
   const id = Number(req.params.id);
   const po = await prisma.purchaseOrder.findFirst({ where: { id, company } });
   if (!po) return res.status(404).json({ error: "PO not found" });
-  if (!canEditProductionActualsForPo(req.user!.role, po.status)) {
+  if (!canEditProductionActualsForPo(req.user!.role, po.status, company, po)) {
     return res.status(403).json({ error: "Not allowed to edit production actuals" });
   }
 
@@ -539,9 +660,11 @@ router.post("/:id/advance", requireAuth, requirePage("orders"), requireStageAdva
   if (!po) return res.status(404).json({ error: "PO not found" });
 
   const { nextStage, fields, note, lines: lineUpdates } = parsed.data;
-  const expectedNext = STAGES[stageIndex(po.status) + 1];
-  if (nextStage !== expectedNext) {
-    return res.status(400).json({ error: `Expected next stage: ${expectedNext}` });
+  const allowed = getAllowedAdvanceStages(company, po);
+  if (!allowed.includes(nextStage)) {
+    return res.status(400).json({
+      error: `Cannot advance to ${nextStage}. Allowed: ${allowed.length ? allowed.join(", ") : "(complete)"}`,
+    });
   }
   if (!canAdvanceStage(req.user!.role, nextStage)) {
     return res.status(403).json({ error: `Cannot advance to ${nextStage}` });
@@ -551,7 +674,9 @@ router.post("/:id/advance", requireAuth, requirePage("orders"), requireStageAdva
   if (!fieldParsed.success) {
     return res.status(400).json({ error: fieldParsed.error.flatten() });
   }
-  const updateData: Record<string, unknown> = { status: nextStage, ...fieldParsed.data };
+  const updateData: Record<string, unknown> = { ...fieldParsed.data };
+  const merged = { ...po, ...fieldParsed.data };
+  updateData.status = deriveStatusFromFields(merged, company);
 
   if (nextStage === "Production Complete") {
     if (!updateData.productionComplete) updateData.productionComplete = todayISO();
@@ -804,7 +929,7 @@ router.post("/:id/mark-stocking-email-sent", requireAuth, requirePage("orders"),
   const id = Number(req.params.id);
   const po = await prisma.purchaseOrder.findFirst({ where: { id, company } });
   if (!po) return res.status(404).json({ error: "PO not found" });
-  if (!isAtOrAfterCiSent(po.status)) {
+  if (!isAtOrAfterCiSentForPo(po.status, company, po)) {
     return res.status(400).json({ error: "Client email is only available after CI sent" });
   }
   if (po.stockingEmailSentAt) {
@@ -822,6 +947,44 @@ router.post("/:id/mark-stocking-email-sent", requireAuth, requirePage("orders"),
         poId: id,
         stage: "Client email sent",
         note: "Client notified by email",
+        userId: req.user!.id,
+        byRole: req.user!.role,
+        at: sentAt,
+      },
+    }),
+  ]);
+
+  const updated = await findPoForCompany(id, company);
+  res.json({ po: updated });
+});
+
+router.post("/:id/mark-pi-sent", requireAuth, requirePage("orders"), async (req, res) => {
+  if (!canMarkStockingEmailSent(req.user!.role)) {
+    return res.status(403).json({ error: "Maintainer access required" });
+  }
+  const company = getCompany(req);
+  const id = Number(req.params.id);
+  const po = await prisma.purchaseOrder.findFirst({ where: { id, company } });
+  if (!po) return res.status(404).json({ error: "PO not found" });
+  if (!po.piNo?.trim()) {
+    return res.status(400).json({ error: "PI number is required before marking PI sent" });
+  }
+  if (po.piSent?.trim()) {
+    return res.status(400).json({ error: "PI already marked as sent" });
+  }
+
+  const sentAt = todayISO();
+  const nextStatus = deriveStatusFromFields({ ...po, piSent: sentAt }, company) || po.status;
+  await prisma.$transaction([
+    prisma.purchaseOrder.update({
+      where: { id },
+      data: { piSent: sentAt, status: nextStatus },
+    }),
+    prisma.poHistory.create({
+      data: {
+        poId: id,
+        stage: "PI Sent",
+        note: "Proforma invoice emailed to internal recipients",
         userId: req.user!.id,
         byRole: req.user!.role,
         at: sentAt,

@@ -13,6 +13,7 @@ import {
   saveUploadDraft,
 } from "../uploadDraft";
 import { extractSynergyPdfPages } from "../synergyPdf";
+import { pickProductPrice } from "../productPricing";
 import { fmtMoney, fmtNum, todayISO } from "../utils";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -32,7 +33,7 @@ type SynergyBatchItem = {
 };
 
 // Header fields computed automatically on upload — shown read-only to cut manual entry.
-const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "totalM2", "skids", "status"]);
+const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "grossInvoiceValue", "totalM2", "skids", "status"]);
 
 const toStr = (v: unknown) => (v == null ? "" : String(v));
 
@@ -43,15 +44,17 @@ function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number |
 
 function summarizeLines(lines: LineForm[]) {
   const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const grossInvoiceValue = lines.reduce((s, l) => s + (Number(l.extInv) || 0), 0);
   const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
   const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
-  return { poValue, totalM2, skids };
+  return { poValue, grossInvoiceValue, totalM2, skids };
 }
 
 function blankForm(): Record<string, string> {
   const f: Record<string, string> = {};
   for (const sec of PO_SECTIONS) for (const fld of sec.fields) if (fld.type !== "bool") f[fld.k as string] = "";
   f.status = "PO Received";
+  f.priority = "Standard";
   f.rev = "0";
   f.poDate = todayISO();
   f.notes = "";
@@ -77,6 +80,13 @@ function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: b
     portOfDest: toStr(g.portOfDest),
     concat: toStr(g.concat) || (toStr(g.poNo) ? `${toStr(g.poNo)}-${toStr(g.rev ?? 0)}` : ""),
     poValue: g.poValue != null ? toStr(g.poValue) : totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
+    grossInvoiceValue:
+      g.grossInvoiceValue != null
+        ? toStr(g.grossInvoiceValue)
+        : totals.grossInvoiceValue
+          ? String(Math.round(totals.grossInvoiceValue * 100) / 100)
+          : "",
+    priority: toStr(g.priority) || "Standard",
     totalM2: g.totalM2 != null ? toStr(g.totalM2) : totals.totalM2 ? String(Math.round(totals.totalM2 * 1000) / 1000) : "",
     skids: g.skids != null ? toStr(g.skids) : totals.skids ? String(totals.skids) : "",
     status: "PO Received",
@@ -203,16 +213,56 @@ export default function UploadPage() {
       ...f,
       concat: poNo ? `${poNo}-${rev}` : "",
       poValue: totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
+      grossInvoiceValue: totals.grossInvoiceValue
+        ? String(Math.round(totals.grossInvoiceValue * 100) / 100)
+        : "",
       totalM2: totals.totalM2 ? String(Math.round(totals.totalM2 * 1000) / 1000) : "",
       skids: totals.skids ? String(totals.skids) : "",
       status: "PO Received",
+      priority: f.priority || "Standard",
     }));
-  }, [form.poNo, form.rev, totals.poValue, totals.totalM2, totals.skids]);
+  }, [form.poNo, form.rev, totals.poValue, totals.grossInvoiceValue, totals.totalM2, totals.skids]);
 
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {
       const loc = ref?.stockingLocations.find((l) => l.name === v);
       setForm((f) => ({ ...f, stockingLocation: v, portOfDest: loc?.arrivalPort ?? f.portOfDest }));
+      return;
+    }
+    if (k === "poDate") {
+      setForm((f) => ({ ...f, poDate: v }));
+      // Re-apply catalog rates for the new PO date (does not change saved POs)
+      setLines((prev) =>
+        prev.map((row) => {
+          const product = row.partNo ? productMap.get(row.partNo.trim()) : undefined;
+          if (!product) return row;
+          const asOf = (v.trim() || todayISO()).slice(0, 10);
+          const rates = pickProductPrice(product, asOf);
+          const filled: LineForm = {
+            ...row,
+            unitMsf: toStr(rates?.pricePerMsq ?? product.pricePerMsq),
+            unitM2: toStr(rates?.pricePerM2 ?? product.pricePerM2),
+            leadTime: toStr(rates?.leadTimeDays ?? product.leadTimeDays),
+            priceAsOf: rates ? asOf : "",
+            priceEffectiveFrom: rates ? rates.effectiveFrom : "",
+          };
+          const wMm = product.widthMm ?? (filled.widthMm ? Number(filled.widthMm) : null);
+          const lMm = product.lengthMm ?? (filled.lengthMm ? Number(filled.lengthMm) : null);
+          const sheets = filled.sheets !== "" ? Number(filled.sheets) : null;
+          const m2PerSheet = wMm && lMm ? (wMm * lMm) / 1_000_000 : null;
+          const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
+          const pps = rates?.pricePerSheet ?? null;
+          const ppm2 = rates?.pricePerM2 ?? null;
+          let extPo: number | null = null;
+          if (sheets != null && pps != null) extPo = sheets * pps;
+          else if (qtyM2 != null && ppm2 != null) extPo = qtyM2 * ppm2;
+          return {
+            ...filled,
+            qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : filled.qtyM2,
+            extPo: extPo != null ? String(Math.round(extPo * 100) / 100) : filled.extPo,
+          };
+        }),
+      );
       return;
     }
     setForm((f) => ({ ...f, [k]: v }));
@@ -237,9 +287,13 @@ export default function UploadPage() {
     void checkDuplicate(form.poNo, form.rev ?? "0");
   }, [form.poNo, form.rev, checkDuplicate]);
 
+  const priceAsOfDate = () => (form.poDate?.trim() || todayISO()).slice(0, 10);
+
   // Recompute derived line numbers (m²/MSF/value) from sheets + product/dims.
   const computeLine = (row: LineForm): LineForm => {
     const product = row.partNo ? productMap.get(row.partNo) : undefined;
+    const asOf = priceAsOfDate();
+    const rates = product ? pickProductPrice(product, asOf) : null;
     const wMm = product?.widthMm ?? (row.widthMm ? Number(row.widthMm) : null);
     const lMm = product?.lengthMm ?? (row.lengthMm ? Number(row.lengthMm) : null);
     const wIn = product?.widthIn ?? null;
@@ -249,8 +303,8 @@ export default function UploadPage() {
     const sqftPerSheet = wIn && lIn ? (wIn * lIn) / 144 : null;
     const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
     const qtyMsf = sheets != null && sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
-    const pps = product?.pricePerSheet ?? null;
-    const ppm2 = product?.pricePerM2 ?? (row.unitM2 ? Number(row.unitM2) : null);
+    const pps = rates?.pricePerSheet ?? null;
+    const ppm2 = rates?.pricePerM2 ?? (row.unitM2 ? Number(row.unitM2) : null);
     let extPo: number | null = null;
     if (sheets != null && pps != null) extPo = sheets * pps;
     else if (qtyM2 != null && ppm2 != null) extPo = qtyM2 * ppm2;
@@ -261,20 +315,28 @@ export default function UploadPage() {
       qtyMsf: qtyMsf != null ? String(Math.round(qtyMsf * 1000) / 1000) : row.qtyMsf,
       extPo: extPo != null ? String(Math.round(extPo * 100) / 100) : row.extPo,
       skids: skids != null ? String(skids) : row.skids,
+      priceAsOf: rates ? asOf : row.priceAsOf ?? "",
+      priceEffectiveFrom: rates ? rates.effectiveFrom : row.priceEffectiveFrom ?? "",
     };
   };
 
-  const fillFromProduct = (row: LineForm, product: Product): LineForm => ({
-    ...row,
-    custPartNo: toStr(product.custPartNo),
-    size: [product.thickness, product.widthIn ? `${product.widthIn}"` : "", product.lengthIn ? `x ${product.lengthIn}"` : "", product.construction].filter(Boolean).join(" "),
-    widthMm: toStr(product.widthMm),
-    lengthMm: toStr(product.lengthMm),
-    color: `${product.vendorColorCode ?? ""} ${product.colorName ?? ""}`.trim(),
-    unitMsf: toStr(product.pricePerMsq),
-    unitM2: toStr(product.pricePerM2),
-    leadTime: toStr(product.leadTimeDays),
-  });
+  const fillFromProduct = (row: LineForm, product: Product): LineForm => {
+    const asOf = priceAsOfDate();
+    const rates = pickProductPrice(product, asOf);
+    return {
+      ...row,
+      custPartNo: toStr(product.custPartNo),
+      size: [product.thickness, product.widthIn ? `${product.widthIn}"` : "", product.lengthIn ? `x ${product.lengthIn}"` : "", product.construction].filter(Boolean).join(" "),
+      widthMm: toStr(product.widthMm),
+      lengthMm: toStr(product.lengthMm),
+      color: `${product.vendorColorCode ?? ""} ${product.colorName ?? ""}`.trim(),
+      unitMsf: toStr(rates?.pricePerMsq ?? product.pricePerMsq),
+      unitM2: toStr(rates?.pricePerM2 ?? product.pricePerM2),
+      leadTime: toStr(rates?.leadTimeDays ?? product.leadTimeDays),
+      priceAsOf: rates ? asOf : "",
+      priceEffectiveFrom: rates ? rates.effectiveFrom : "",
+    };
+  };
 
   // Update a line cell; auto-fill from the catalog the moment a matching
   // part # is entered, and recompute derived numbers live.
@@ -519,6 +581,8 @@ export default function UploadPage() {
       if (activeBatchPage != null) setSynergyBatch(mergeEditorIntoBatch(synergyBatch));
       const payload: Record<string, unknown> = { ...form, active };
       if (!form.poValue) payload.poValue = totals.poValue || null;
+      if (!form.grossInvoiceValue) payload.grossInvoiceValue = totals.grossInvoiceValue || null;
+      if (!form.priority) payload.priority = "Standard";
       if (!form.totalM2) payload.totalM2 = totals.totalM2 || null;
       if (!form.skids) payload.skids = totals.skids || null;
       payload.lines = lines.map((l, idx) => ({ ...l, lineNo: l.lineNo || String(idx + 1) }));
@@ -800,7 +864,10 @@ export default function UploadPage() {
           <div className="font-semibold">Purchase Order details</div>
           <div className="ml-auto text-xs text-slate-500 text-right">
             <div>SI #{form.siNo || "—"} · {form.concat || "—"}</div>
-            <div>{lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · {fmtMoney(totals.poValue)} · {totals.skids || 0} skids</div>
+            <div>
+              {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · PO {fmtMoney(totals.poValue)} · Gross{" "}
+              {fmtMoney(totals.grossInvoiceValue)} · {totals.skids || 0} skids
+            </div>
           </div>
         </div>
 

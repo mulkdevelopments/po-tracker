@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma, requireAuth, requirePage, requireWrite } from "../middleware/auth.js";
 import { canAccessPage } from "../constants.js";
 import type { NextFunction, Request, Response } from "express";
+import { updateProductPrice } from "../productPricing.js";
 
 const router = Router();
 
@@ -26,18 +27,31 @@ const emailField = z.preprocess(
 
 // Read-only reference data — any authenticated user (needed by orders, dashboard, items).
 router.get("/", requireAuth, async (_req, res) => {
-  const [stages, ports, stockingLocations, shippingLines, colors, products, config] =
+  const [stages, ports, stockingLocations, shippingLines, colors, products, config, capacityPeriods] =
     await Promise.all([
       prisma.processStage.findMany({ orderBy: { order: "asc" } }),
       prisma.port.findMany({ orderBy: { id: "asc" } }),
       prisma.stockingLocation.findMany({ orderBy: { id: "asc" } }),
       prisma.shippingLine.findMany({ orderBy: { id: "asc" } }),
       prisma.color.findMany({ orderBy: { id: "asc" } }),
-      prisma.product.findMany({ orderBy: { id: "asc" } }),
+      prisma.product.findMany({
+        orderBy: { id: "asc" },
+        include: { prices: { orderBy: { effectiveFrom: "desc" } } },
+      }),
       prisma.appConfig.findUnique({ where: { id: 1 } }),
+      prisma.capacityPeriod.findMany({ orderBy: { effectiveFrom: "asc" } }),
     ]);
 
-  res.json({ stages, ports, stockingLocations, shippingLines, colors, products, config });
+  res.json({
+    stages,
+    ports,
+    stockingLocations,
+    shippingLines,
+    colors,
+    products,
+    config,
+    capacityPeriods,
+  });
 });
 
 const configSchema = z.object({
@@ -132,6 +146,18 @@ const productSchema = z.object({
   pricePerMsq: numField,
   pricePerSheet: numField,
   leadTimeDays: intField,
+  effectiveFrom: strField,
+  effectiveTo: strField,
+});
+
+const capacityPeriodSchema = z.object({
+  effectiveFrom: z.string().min(1),
+  effectiveTo: strField,
+  label: strField,
+  productionLines: z.coerce.number().int().min(1),
+  m2PerLinePerDay: z.coerce.number().min(0),
+  m2PerContainer: z.coerce.number().min(1),
+  workingDaysPerMonth: z.coerce.number().int().min(1).max(31),
 });
 
 const colorSchema = z.object({
@@ -163,5 +189,65 @@ crud("colors", () => prisma.color as unknown as Delegate, colorSchema, "color");
 crud("locations", () => prisma.stockingLocation as unknown as Delegate, locationSchema, "location");
 crud("ports", () => prisma.port as unknown as Delegate, portSchema, "port");
 crud("shipping-lines", () => prisma.shippingLine as unknown as Delegate, shippingLineSchema, "shippingLine");
+crud("capacity-periods", () => prisma.capacityPeriod as unknown as Delegate, capacityPeriodSchema, "capacityPeriod");
+
+const updatePriceSchema = z.object({
+  pricePerSqft: numField,
+  pricePerM2: numField,
+  pricePerMsq: numField,
+  pricePerSheet: numField,
+  leadTimeDays: intField,
+  effectiveFrom: z.string().min(1),
+});
+
+/** Close current price and open a new dated version — does not change existing POs */
+router.post(
+  "/products/:id/update-price",
+  requireAuth,
+  requirePage("master"),
+  requireWrite,
+  async (req, res) => {
+    const parsed = updatePriceSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const id = Number(req.params.id);
+    const product = await prisma.product.findUnique({ where: { id } });
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    try {
+      const price = await updateProductPrice(id, parsed.data, parsed.data.effectiveFrom);
+      const updated = await prisma.product.findUnique({
+        where: { id },
+        include: { prices: { orderBy: { effectiveFrom: "desc" } } },
+      });
+      res.json({ product: updated, price });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : "Failed to update price" });
+    }
+  },
+);
+
+/** After creating a product with prices, seed the first ProductPrice row */
+router.post("/products/:id/seed-price", requireAuth, requirePage("master"), requireWrite, async (req, res) => {
+  const id = Number(req.params.id);
+  const product = await prisma.product.findUnique({ where: { id }, include: { prices: true } });
+  if (!product) return res.status(404).json({ error: "Product not found" });
+  if (product.prices.length > 0) return res.json({ product });
+  const from = (req.body?.effectiveFrom as string) || product.effectiveFrom || new Date().toISOString().slice(0, 10);
+  const price = await updateProductPrice(
+    id,
+    {
+      pricePerSqft: product.pricePerSqft,
+      pricePerM2: product.pricePerM2,
+      pricePerMsq: product.pricePerMsq,
+      pricePerSheet: product.pricePerSheet,
+      leadTimeDays: product.leadTimeDays,
+    },
+    from,
+  );
+  const updated = await prisma.product.findUnique({
+    where: { id },
+    include: { prices: { orderBy: { effectiveFrom: "desc" } } },
+  });
+  res.json({ product: updated, price });
+});
 
 export default router;

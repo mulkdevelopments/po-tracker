@@ -1,4 +1,4 @@
-import { STAGES } from "./types";
+import { flatStageIds } from "./workflows";
 import type { PurchaseOrder, PoLine } from "./types";
 
 export type FieldType = "text" | "number" | "date" | "bool" | "select" | "url";
@@ -19,15 +19,24 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "poNo", label: "PO #" },
       { k: "rev", label: "Rev #", type: "number" },
       { k: "concat", label: "Concat" },
-      { k: "status", label: "Order Status", type: "select", options: [...STAGES] },
+      { k: "status", label: "Order Status", type: "select", options: flatStageIds("UFP") },
       { k: "poDate", label: "Date Ordered (PO Date)", type: "date" },
       { k: "active", label: "Active", type: "bool" },
       { k: "skids", label: "Qty of Skids", type: "number" },
       { k: "stockingLocation", label: "Stocking Location" },
       { k: "portOfDest", label: "Port of Destination" },
-      { k: "poValue", label: "PO Value $", type: "number" },
+      { k: "priority", label: "Priority", type: "select", options: ["Standard", "High"] },
+      { k: "poValue", label: "PO Value $ (sq ft)", type: "number" },
+      { k: "grossInvoiceValue", label: "Gross Invoice Value $ (m²)", type: "number" },
       { k: "totalM2", label: "Total M2", type: "number" },
       { k: "productionSite", label: "Production Site" },
+    ],
+  },
+  {
+    title: "Planning",
+    fields: [
+      { k: "planningDate", label: "Planning date", type: "date" },
+      { k: "productionSite", label: "Production site" },
     ],
   },
   {
@@ -42,6 +51,10 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
   {
     title: "PI Approved",
     fields: [{ k: "piApprovedDate", label: "PI Approved Date", type: "date" }],
+  },
+  {
+    title: "PI Sent",
+    fields: [{ k: "piSent", label: "PI Sent Date", type: "date" }],
   },
   {
     title: "Downpayment / In Production",
@@ -118,6 +131,7 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "productionStatus", label: "Production Status", type: "select", options: ["", "UNDER PRODUCTION", "PRODUCTION COMPLETE", "CONTAINER BOOKED", "ON HOLD", "SHIPPED"] },
       { k: "standardColorsOnly", label: "Standard Colors Only?" },
       { k: "allMaterialAvailable", label: "All Material Available" },
+      { k: "productionSequence", label: "Production Sequence", type: "number" },
       { k: "productionBegin", label: "Production Begin", type: "date" },
       { k: "productionComplete", label: "Production Complete", type: "date" },
       { k: "dispatchFromFactory", label: "Dispatch from Factory", type: "date" },
@@ -149,6 +163,8 @@ export const LINE_COLS: LineCol[] = [
   { k: "unitM2", label: "Unit (M2)" },
   { k: "extPo", label: "Ext (PO)" },
   { k: "extInv", label: "Ext (Inv)" },
+  { k: "priceAsOf", label: "Price as of", w: "w-28" },
+  { k: "priceEffectiveFrom", label: "Price from", w: "w-28" },
   { k: "leadTime", label: "Lead Time" },
   { k: "notes", label: "Notes" },
 ];

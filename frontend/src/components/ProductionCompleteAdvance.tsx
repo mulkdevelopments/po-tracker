@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api";
 import type { PurchaseOrder, PoLine } from "../types";
 import { fmtNum, todayISO } from "../utils";
@@ -97,8 +98,9 @@ export default function ProductionCompleteAdvance({ po, mode, onUpdated, onClose
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl w-[780px] max-w-full max-h-[90vh] flex flex-col">
+    createPortal(
+    <div className="fixed inset-0 bg-black/40 z-[80] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-[780px] max-w-full max-h-[90vh] flex flex-col my-auto">
         <div className="px-5 py-3 border-b border-slate-200 font-semibold shrink-0">
           {isEdit ? "Edit production actuals" : "Mark production complete"}
         </div>
@@ -209,7 +211,9 @@ export default function ProductionCompleteAdvance({ po, mode, onUpdated, onClose
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
+    )
   );
 }
 

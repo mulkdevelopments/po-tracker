@@ -1,22 +1,14 @@
-import { STAGES, type PurchaseOrder } from "./types";
-import { CI_PENDING_STATUS, CI_REJECTED_STATUS, PI_REJECTED_STATUS, PI_PENDING_STATUS } from "./piApproval";
+import type { PurchaseOrder } from "./types";
+import { isAtOrAfterCiSent, resolvePipelineStatus, type WorkflowCompany } from "./workflows";
 import { fmtDate, fmtMoney } from "./utils";
 
-function resolvePipelineStatus(status: string): string {
-  if (status === PI_REJECTED_STATUS) return PI_PENDING_STATUS;
-  if (status === CI_REJECTED_STATUS) return CI_PENDING_STATUS;
-  return status;
-}
-
-export function isAtOrAfterCiSent(po: PurchaseOrder): boolean {
-  const resolved = resolvePipelineStatus(po.status);
-  const idx = STAGES.indexOf(resolved as (typeof STAGES)[number]);
-  if (idx < 0) return false;
-  return idx >= STAGES.indexOf(CI_PENDING_STATUS);
+export function isAtOrAfterCiSentPo(po: PurchaseOrder): boolean {
+  const company = (po.company ?? "UFP") as WorkflowCompany;
+  return isAtOrAfterCiSent(company, resolvePipelineStatus(po.status), po as unknown as Record<string, unknown>);
 }
 
 export function pendingStockingEmails(pos: PurchaseOrder[]): PurchaseOrder[] {
-  return pos.filter((p) => p.active !== false && isAtOrAfterCiSent(p) && !p.stockingEmailSentAt);
+  return pos.filter((p) => p.active !== false && isAtOrAfterCiSentPo(p) && !p.stockingEmailSentAt);
 }
 
 export function canMarkStockingEmailRole(role: string | undefined): boolean {

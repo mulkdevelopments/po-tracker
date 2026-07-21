@@ -4,17 +4,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-echo "==> Freeing ports 4000 (API) and 5173 (frontend)..."
-for port in 4000 5173; do
-  pids=$(lsof -ti :"$port" 2>/dev/null || true)
+# Assigned ecosystem ports (do not use 4000/5173 — those are HRMS)
+API_PORT=4002
+WEB_PORT=5174
+
+echo "==> Freeing ports ${API_PORT} (API) and ${WEB_PORT} (frontend)..."
+for port in "$API_PORT" "$WEB_PORT"; do
+  pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
   if [ -n "$pids" ]; then
+    # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
     echo "    Killed process(es) on port $port"
+  else
+    echo "    Port $port is free"
   fi
 done
-pkill -f "tsx watch src/index.ts" 2>/dev/null || true
 
-echo "==> Starting PostgreSQL (Docker, port 5435)..."
+echo "==> Starting PostgreSQL (Docker, port 5436)..."
 docker compose up db -d
 
 echo "==> Waiting for database..."
@@ -39,12 +45,12 @@ echo "==> Frontend setup..."
 cd "$ROOT/frontend"
 npm install --silent 2>/dev/null || npm install
 
-echo "==> Starting backend (http://localhost:4000)..."
+echo "==> Starting backend (http://localhost:${API_PORT})..."
 cd "$ROOT/backend"
 npm run dev &
 BACKEND_PID=$!
 
-echo "==> Starting frontend (http://localhost:5173)..."
+echo "==> Starting frontend (http://localhost:${WEB_PORT})..."
 cd "$ROOT/frontend"
 npm run dev &
 FRONTEND_PID=$!
@@ -52,9 +58,9 @@ FRONTEND_PID=$!
 echo ""
 echo "============================================"
 echo "  PO Tracker dev stack is running"
-echo "  App:      http://localhost:5173"
-echo "  API:      http://localhost:4000"
-echo "  Postgres: localhost:5435"
+echo "  App:      http://localhost:${WEB_PORT}"
+echo "  API:      http://localhost:${API_PORT}"
+echo "  Postgres: localhost:5436"
 echo "  Login:    admin@ufp.local / ChangeMe123!"
 echo "============================================"
 echo "  Backend PID:  $BACKEND_PID"

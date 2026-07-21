@@ -5,7 +5,7 @@ import { fmtDate } from "../utils";
 import {
   buildStockingMailto,
   canMarkStockingEmailRole,
-  isAtOrAfterCiSent,
+  isAtOrAfterCiSentPo,
   stockingLocationEmail,
 } from "../stockingEmail";
 
@@ -19,7 +19,7 @@ interface Props {
 export default function StockingEmailQueue({ po, user, locations, onUpdated }: Props) {
   const [busy, setBusy] = useState(false);
 
-  if (!canMarkStockingEmailRole(user.role) || !isAtOrAfterCiSent(po)) return null;
+  if (!canMarkStockingEmailRole(user.role) || !isAtOrAfterCiSentPo(po)) return null;
 
   const email = stockingLocationEmail(po, locations);
   const sent = !!po.stockingEmailSentAt;

@@ -1,8 +1,10 @@
 import { Router } from "express";
 import multer from "multer";
 import pdf from "pdf-parse";
+import type { Product, ProductPrice } from "@prisma/client";
 import { prisma, requireAuth, requirePage } from "../middleware/auth.js";
 import { parseCompany } from "../companies.js";
+import { pickPriceForDate, ratesFromProduct } from "../productPricing.js";
 import { guessSynergyPage, guessSynergyPages } from "../synergyDecode.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -31,22 +33,7 @@ function pickFrom(text: string, list: string[]): string {
   return "";
 }
 
-type ProductRow = {
-  partNo: string;
-  custPartNo: string | null;
-  thickness: string | null;
-  construction: string | null;
-  widthIn: number | null;
-  widthMm: number | null;
-  lengthIn: number | null;
-  lengthMm: number | null;
-  colorName: string | null;
-  vendorColorCode: string | null;
-  pricePerM2: number | null;
-  pricePerMsq: number | null;
-  pricePerSheet: number | null;
-  leadTimeDays: number | null;
-};
+type ProductRow = Product & { prices: ProductPrice[] };
 
 function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number | null {
   if (sheets == null || sheetsPerSkid <= 0) return null;
@@ -81,15 +68,21 @@ function lineFromProduct(
   lineNo: number,
   sheets: number | null,
   sheetsPerSkid: number,
+  asOf: string,
   skidsOverride?: number | null,
 ) {
+  const rates = pickPriceForDate(p.prices ?? [], asOf) ?? ratesFromProduct(p, asOf);
+  const pricePerM2 = rates?.pricePerM2 ?? null;
+  const pricePerMsq = rates?.pricePerMsq ?? null;
+  const pricePerSheet = rates?.pricePerSheet ?? null;
+  const leadTimeDays = rates?.leadTimeDays ?? null;
   const m2PerSheet = p.widthMm && p.lengthMm ? (p.widthMm * p.lengthMm) / 1_000_000 : null;
   const sqftPerSheet = p.widthIn && p.lengthIn ? (p.widthIn * p.lengthIn) / 144 : null;
   const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
   const qtyMsf = sheets != null && sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
   let extPo: number | null = null;
-  if (sheets != null && p.pricePerSheet != null) extPo = sheets * p.pricePerSheet;
-  else if (qtyM2 != null && p.pricePerM2 != null) extPo = qtyM2 * p.pricePerM2;
+  if (sheets != null && pricePerSheet != null) extPo = sheets * pricePerSheet;
+  else if (qtyM2 != null && pricePerM2 != null) extPo = qtyM2 * pricePerM2;
   const sizeLabel = [p.thickness, p.widthIn ? `${p.widthIn}"` : "", p.lengthIn ? `x ${p.lengthIn}"` : "", p.construction]
     .filter(Boolean)
     .join(" ");
@@ -105,10 +98,12 @@ function lineFromProduct(
     qtyM2,
     sheets,
     skids: skidsOverride ?? skidsFromSheets(sheets, sheetsPerSkid),
-    unitMsf: p.pricePerMsq,
-    unitM2: p.pricePerM2,
+    unitMsf: pricePerMsq,
+    unitM2: pricePerM2,
     extPo,
-    leadTime: p.leadTimeDays,
+    leadTime: leadTimeDays,
+    priceAsOf: rates ? asOf : null,
+    priceEffectiveFrom: rates?.effectiveFrom ?? null,
     matched: true,
   };
 }
@@ -165,6 +160,8 @@ function guessFields(text: string, ref: Ref) {
     portOfDest: matchedLoc?.arrivalPort ?? "",
   };
 
+  const asOf = String(out.poDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+
   // Lines: find each part number in the text and enrich from the catalog.
   const lines: Record<string, unknown>[] = [];
   const seen = new Set<string>();
@@ -179,7 +176,7 @@ function guessFields(text: string, ref: Ref) {
     seen.add(partNo);
     const ctx = clean.slice(m.index, Math.min(clean.length, m.index + 220));
     const { sheets, skids } = parseLineQty(ctx, ref.sheetsPerSkid);
-    lines.push(lineFromProduct(product, ++idx, sheets, ref.sheetsPerSkid, skids));
+    lines.push(lineFromProduct(product, ++idx, sheets, ref.sheetsPerSkid, asOf, skids));
   }
 
   // Fallback: if no catalog parts matched, do best-effort size/color extraction.
@@ -217,13 +214,13 @@ function guessFields(text: string, ref: Ref) {
 async function loadRef(company: ReturnType<typeof parseCompany>): Promise<Ref> {
   void company; // reference data is shared across companies
   const [products, colors, locations, config] = await Promise.all([
-    prisma.product.findMany(),
+    prisma.product.findMany({ include: { prices: true } }),
     prisma.color.findMany(),
     prisma.stockingLocation.findMany(),
     prisma.appConfig.findUnique({ where: { id: 1 } }),
   ]);
   return {
-    products: products as ProductRow[],
+    products,
     colorNames: colors.map((c) => c.name).filter((n): n is string => !!n),
     locations: locations.map((l) => ({ name: l.name, arrivalPort: l.arrivalPort })),
     sheetsPerSkid: config?.sheetsPerSkid ?? 200,
@@ -274,11 +271,15 @@ router.post("/decode-synergy-pages", requireAuth, requirePage("upload"), async (
 
 // Look up a single catalog product by part number (for manual line entry autofill).
 router.get("/product/:partNo", requireAuth, requirePage("upload"), async (req, res) => {
-  const product = await prisma.product.findUnique({ where: { partNo: String(req.params.partNo) } });
+  const product = await prisma.product.findUnique({
+    where: { partNo: String(req.params.partNo) },
+    include: { prices: true },
+  });
   if (!product) return res.status(404).json({ error: "Not found" });
   const config = await prisma.appConfig.findUnique({ where: { id: 1 } });
   const sheetsPerSkid = config?.sheetsPerSkid ?? 200;
-  res.json({ line: lineFromProduct(product as ProductRow, 1, null, sheetsPerSkid), product });
+  const asOf = String(req.query.asOf || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  res.json({ line: lineFromProduct(product, 1, null, sheetsPerSkid, asOf), product });
 });
 
 export default router;

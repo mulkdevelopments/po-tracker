@@ -66,7 +66,7 @@ export default function Layout() {
     const { pos } = await api.getOrders();
     const cols = [
       "poNo", "rev", "status", "poDate", "stockingLocation", "productionSite",
-      "portOfDest", "poValue", "totalM2", "skids", "piNo", "containerNo", "bol",
+      "portOfDest", "priority", "poValue", "grossInvoiceValue", "totalM2", "skids", "piNo", "containerNo", "bol",
     ];
     const head = cols.join(",");
     const rows = pos.map((p) =>

@@ -1,21 +1,9 @@
 /** Cynergy handwritten ORDER FORM decoder (one page = one PO). */
 
-export type SynergyProductRow = {
-  partNo: string;
-  custPartNo: string | null;
-  thickness: string | null;
-  construction: string | null;
-  widthIn: number | null;
-  widthMm: number | null;
-  lengthIn: number | null;
-  lengthMm: number | null;
-  colorName: string | null;
-  vendorColorCode: string | null;
-  pricePerM2: number | null;
-  pricePerMsq: number | null;
-  pricePerSheet: number | null;
-  leadTimeDays: number | null;
-};
+import type { Product, ProductPrice } from "@prisma/client";
+import { pickPriceForDate, ratesFromProduct } from "./productPricing.js";
+
+export type SynergyProductRow = Product & { prices?: ProductPrice[] };
 
 export type SynergyRef = {
   products: SynergyProductRow[];
@@ -133,14 +121,20 @@ function lineFromProduct(
   sheets: number | null,
   sheetsPerSkid: number,
   rawDescription: string,
+  asOf: string,
 ) {
+  const rates = pickPriceForDate(p.prices ?? [], asOf) ?? ratesFromProduct(p, asOf);
+  const pricePerM2 = rates?.pricePerM2 ?? null;
+  const pricePerMsq = rates?.pricePerMsq ?? null;
+  const pricePerSheet = rates?.pricePerSheet ?? null;
+  const leadTimeDays = rates?.leadTimeDays ?? null;
   const m2PerSheet = p.widthMm && p.lengthMm ? (p.widthMm * p.lengthMm) / 1_000_000 : null;
   const sqftPerSheet = p.widthIn && p.lengthIn ? (p.widthIn * p.lengthIn) / 144 : null;
   const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
   const qtyMsf = sheets != null && sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
   let extPo: number | null = null;
-  if (sheets != null && p.pricePerSheet != null) extPo = sheets * p.pricePerSheet;
-  else if (qtyM2 != null && p.pricePerM2 != null) extPo = qtyM2 * p.pricePerM2;
+  if (sheets != null && pricePerSheet != null) extPo = sheets * pricePerSheet;
+  else if (qtyM2 != null && pricePerM2 != null) extPo = qtyM2 * pricePerM2;
   const sizeLabel = [p.thickness, p.widthIn ? `${p.widthIn}"` : "", p.lengthIn ? `x ${p.lengthIn}"` : "", p.construction]
     .filter(Boolean)
     .join(" ");
@@ -156,10 +150,12 @@ function lineFromProduct(
     qtyM2,
     sheets,
     skids: skidsFromSheets(sheets, sheetsPerSkid),
-    unitMsf: p.pricePerMsq,
-    unitM2: p.pricePerM2,
+    unitMsf: pricePerMsq,
+    unitM2: pricePerM2,
     extPo,
-    leadTime: p.leadTimeDays,
+    leadTime: leadTimeDays,
+    priceAsOf: rates ? asOf : null,
+    priceEffectiveFrom: rates?.effectiveFrom ?? null,
     matched: true,
     rawDescription,
   };
@@ -362,11 +358,12 @@ export function guessSynergyPage(text: string, ref: SynergyRef, page = 1) {
 
   const rawRows = parseSynergyLineRows(text);
   const lines: Record<string, unknown>[] = [];
+  const asOf = (poDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
   let idx = 0;
   for (const row of rawRows) {
     const product = matchSynergyProduct(row.description, ref.products);
     if (product) {
-      lines.push(lineFromProduct(product, ++idx, row.qty, ref.sheetsPerSkid, row.description));
+      lines.push(lineFromProduct(product, ++idx, row.qty, ref.sheetsPerSkid, row.description, asOf));
     } else {
       const dims = parseSynergyDimensions(row.description);
       lines.push({

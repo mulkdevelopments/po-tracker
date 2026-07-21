@@ -1,34 +1,18 @@
 import type { PurchaseOrder, ReferenceData } from "./types";
+import {
+  getWorkflow,
+  reportGroupLabel,
+  hasReachedContainerLoaded,
+  type WorkflowCompany,
+} from "./workflows";
 
-// The 8 real pipeline stages (the source treats "Arrived" as a derived overlay
-// based on the arrival date, not a workflow status).
-export const PIPELINE_STAGES = [
-  "PO Received",
-  "PI Generated",
-  "PI Approved",
-  "Downpayment Received",
-  "In Production",
-  "Production Complete",
-  "Container Loaded",
-  "CI sent",
-  "CI approved",
-  "BL",
-  "Balance Payment Received",
-  "Telex / Seaway Released",
-] as const;
-
-const CONTAINER_LOADED_IDX = PIPELINE_STAGES.indexOf("Container Loaded");
-
-function sidx(s: string): number {
-  const i = PIPELINE_STAGES.indexOf(s as (typeof PIPELINE_STAGES)[number]);
-  return i < 0 ? 0 : i;
-}
+export const PIPELINE_STAGES = getWorkflow("UFP").map((g) => g.label);
 
 const has = (v: unknown) => v != null && v !== "" && v !== "N/A";
 
-// "Shipped" = container loaded onward; everything before is backlog / on-order.
 export function isShipped(o: PurchaseOrder): boolean {
-  return sidx(o.status) >= CONTAINER_LOADED_IDX;
+  const company = (o.company ?? "UFP") as WorkflowCompany;
+  return hasReachedContainerLoaded(company, o.status, o as unknown as Record<string, unknown>);
 }
 
 function daysBetween(a?: string | null, b?: string | null): number | null {
@@ -118,14 +102,20 @@ export function dashboardActiveYearOrders(pos: PurchaseOrder[], year: number): P
   return dashboardYearOrders(pos, year).filter((p) => p.active !== false);
 }
 
-export function computeDashboard(pos: PurchaseOrder[], ref: ReferenceData, year: number): DashboardReport {
+export function computeDashboard(
+  pos: PurchaseOrder[],
+  ref: ReferenceData,
+  year: number,
+  company: WorkflowCompany = "UFP",
+): DashboardReport {
   const inYear = dashboardYearOrders(pos, year);
   const active = dashboardActiveYearOrders(pos, year);
   const locations = ref.stockingLocations.map((l) => l.name);
   const countBy = (pred: (o: PurchaseOrder) => boolean) => locations.map((loc) => active.filter((o) => o.stockingLocation === loc && pred(o)).length);
 
-  const statusRows = PIPELINE_STAGES.map((stage) => {
-    const counts = countBy((o) => o.status === stage);
+  const pipelineStages = getWorkflow(company).map((g) => g.label);
+  const statusRows = pipelineStages.map((stage) => {
+    const counts = countBy((o) => reportGroupLabel(company, o.status) === stage);
     return { stage, counts, total: counts.reduce((a, b) => a + b, 0) };
   });
   const arrivedCounts = countBy((o) => has(o.arrivalDate));
@@ -272,12 +262,15 @@ export interface StatusSlice {
   count: number;
 }
 
-export function statusMix(pos: PurchaseOrder[], year: number): StatusSlice[] {
+export function statusMix(pos: PurchaseOrder[], year: number, company: WorkflowCompany = "UFP"): StatusSlice[] {
   const active = dashboardActiveYearOrders(pos, year);
-  return PIPELINE_STAGES.map((status) => ({
-    status,
-    count: active.filter((o) => o.status === status).length,
-  })).filter((s) => s.count > 0);
+  const pipelineStages = getWorkflow(company).map((g) => g.label);
+  return pipelineStages
+    .map((status) => ({
+      status,
+      count: active.filter((o) => reportGroupLabel(company, o.status) === status).length,
+    }))
+    .filter((s) => s.count > 0);
 }
 
 export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -362,6 +355,72 @@ function monthWorkingDays(year: number, monthIdx: number, workingDays: number): 
 
 export function computeCapacity(pos: PurchaseOrder[], year: number, c: CapacityConfig): CapacityMonth[] {
   return computeMonthly(pos, year).map((m, i) => {
+    const wd = monthWorkingDays(year, i, c.workingDaysPerMonth);
+    const capM2 = c.lines * c.m2PerLinePerDay * wd;
+    const capContainers = c.m2PerContainer ? capM2 / c.m2PerContainer : 0;
+    return {
+      ...m,
+      workingDays: wd,
+      capM2,
+      capContainers,
+      utilCon: capContainers ? (m.containers / capContainers) * 100 : 0,
+    };
+  });
+}
+
+export function isEffectiveOn(
+  from: string | null | undefined,
+  to: string | null | undefined,
+  onISO: string,
+): boolean {
+  if (from && from > onISO) return false;
+  if (to && to < onISO) return false;
+  return true;
+}
+
+/** Pick capacity settings for a calendar date from dated periods (fallback to defaults). */
+export function capacityConfigForDate(
+  periods: {
+    effectiveFrom: string;
+    effectiveTo?: string | null;
+    productionLines: number;
+    m2PerLinePerDay: number;
+    m2PerContainer: number;
+    workingDaysPerMonth: number;
+  }[],
+  onISO: string,
+  fallback?: CapacityConfig,
+): CapacityConfig {
+  const hit = [...periods]
+    .filter((p) => isEffectiveOn(p.effectiveFrom, p.effectiveTo, onISO))
+    .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
+  if (hit) {
+    return {
+      lines: hit.productionLines,
+      m2PerLinePerDay: hit.m2PerLinePerDay,
+      m2PerContainer: hit.m2PerContainer,
+      workingDaysPerMonth: hit.workingDaysPerMonth,
+    };
+  }
+  return fallback ?? { lines: 2, m2PerLinePerDay: 3000, m2PerContainer: 8300, workingDaysPerMonth: 26 };
+}
+
+export function computeCapacityWithPeriods(
+  pos: PurchaseOrder[],
+  year: number,
+  periods: {
+    effectiveFrom: string;
+    effectiveTo?: string | null;
+    productionLines: number;
+    m2PerLinePerDay: number;
+    m2PerContainer: number;
+    workingDaysPerMonth: number;
+  }[],
+  fallback?: CapacityConfig,
+): CapacityMonth[] {
+  return computeMonthly(pos, year).map((m, i) => {
+    const mid = `${year}-${String(i + 1).padStart(2, "0")}-15`;
+    const c = capacityConfigForDate(periods, mid, fallback);
     const wd = monthWorkingDays(year, i, c.workingDaysPerMonth);
     const capM2 = c.lines * c.m2PerLinePerDay * wd;
     const capContainers = c.m2PerContainer ? capM2 / c.m2PerContainer : 0;

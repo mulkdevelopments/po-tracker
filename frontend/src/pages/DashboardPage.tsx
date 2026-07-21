@@ -1,15 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, ReferenceData, AppConfigData } from "../types";
 import { fmtMoney, fmtNum } from "../utils";
 import { computeDashboard, statusMix, totalRow, dashboardActiveYearOrders, type VolumeRow } from "../reports";
+import type { Company } from "../companies";
 import { StatusDoughnut, AnnualSalesPanel, CapacityPanel, DashboardYearFilter } from "../components/DashboardCharts";
 import PoDrawer from "../components/PoDrawer";
 import StockingEmailNotice from "../components/StockingEmailNotice";
+import PiDueNotice from "../components/PiDueNotice";
 import { usePendingStockingEmails } from "../hooks/usePendingStockingEmails";
 import { canMarkStockingEmailRole } from "../stockingEmail";
+import { pendingPiDue } from "../piDue";
+import { canMarkPiEmailRole } from "../piEmail";
+import { useCompany } from "../CompanyContext";
+import { reportGroupLabel } from "../workflows";
 import { notifyPoUpdated } from "../poEvents";
 import type { MasterData } from "../types";
 
@@ -29,16 +35,20 @@ function StatusDetailModal({
   status,
   pos,
   year,
+  company,
   onClose,
   onSelectPo,
 }: {
   status: string;
   pos: PurchaseOrder[];
   year: number;
+  company: Company;
   onClose: () => void;
   onSelectPo: (po: PurchaseOrder) => void;
 }) {
-  const matches = dashboardActiveYearOrders(pos, year).filter((p) => p.status === status);
+  const matches = dashboardActiveYearOrders(pos, year).filter(
+    (p) => reportGroupLabel(company, p.status) === status,
+  );
   const totalValue = matches.reduce((s, p) => s + (Number(p.poValue) || 0), 0);
   const totalM2 = matches.reduce((s, p) => s + (Number(p.totalM2) || 0), 0);
   return (
@@ -119,7 +129,9 @@ function VolumeTable({ title, rows, year }: { title: string; rows: VolumeRow[]; 
 
 export default function DashboardPage() {
   const { user, canEdit } = useAuth();
+  const { company } = useCompany();
   const showStockingEmailQueue = canMarkStockingEmailRole(user?.role);
+  const showPiQueue = canMarkPiEmailRole(user?.role);
   const { pending: pendingStockingEmail } = usePendingStockingEmails(!!showStockingEmailQueue);
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [ref, setRef] = useState<ReferenceData | null>(null);
@@ -157,6 +169,8 @@ export default function DashboardPage() {
     setSelected(po);
   };
 
+  const piDue = useMemo(() => (showPiQueue ? pendingPiDue(pos) : []), [showPiQueue, pos]);
+
   if (loading) return <div className="text-slate-500">Loading dashboard…</div>;
   if (error || !ref) {
     return (
@@ -166,8 +180,8 @@ export default function DashboardPage() {
     );
   }
 
-  const d = computeDashboard(pos, ref, year);
-  const mix = statusMix(pos, year);
+  const d = computeDashboard(pos, ref, year, company);
+  const mix = statusMix(pos, year, company);
   const yearScope = `PO date in ${year} · Total PO includes inactive`;
 
   const stagePill = (s: string) => {
@@ -179,6 +193,9 @@ export default function DashboardPage() {
     <div className="space-y-6">
       {showStockingEmailQueue && pendingStockingEmail.length > 0 && (
         <StockingEmailNotice pending={pendingStockingEmail} onOpenPo={(po) => setSelected(po)} />
+      )}
+      {showPiQueue && piDue.length > 0 && (
+        <PiDueNotice pending={piDue} onOpenPo={(po) => setSelected(po)} />
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -203,7 +220,13 @@ export default function DashboardPage() {
 
       <AnnualSalesPanel pos={pos} year={year} />
       {config && (
-        <CapacityPanel pos={pos} year={year} config={config} canEditMaster={canEdit()} />
+        <CapacityPanel
+          pos={pos}
+          year={year}
+          config={config}
+          capacityPeriods={ref.capacityPeriods ?? []}
+          canEditMaster={canEdit()}
+        />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -295,6 +318,7 @@ export default function DashboardPage() {
           status={statusDetail}
           pos={pos}
           year={year}
+          company={company}
           onClose={() => setStatusDetail(null)}
           onSelectPo={openPoFromStatusModal}
         />

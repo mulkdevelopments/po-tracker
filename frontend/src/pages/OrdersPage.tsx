@@ -6,6 +6,7 @@ import PoDrawer from "../components/PoDrawer";
 import PiApprovalNotice from "../components/PiApprovalNotice";
 import CiApprovalNotice from "../components/CiApprovalNotice";
 import StockingEmailNotice from "../components/StockingEmailNotice";
+import PiDueNotice from "../components/PiDueNotice";
 import { usePendingPiApprovals } from "../hooks/usePendingPiApprovals";
 import { usePendingCiApprovals } from "../hooks/usePendingCiApprovals";
 import { usePendingStockingEmails } from "../hooks/usePendingStockingEmails";
@@ -22,11 +23,14 @@ import {
 } from "../piApproval";
 import { notifyPoUpdated } from "../poEvents";
 import { canMarkStockingEmailRole } from "../stockingEmail";
+import { pendingPiDue } from "../piDue";
+import { canMarkPiEmailRole } from "../piEmail";
 import ResubmitTag from "../components/ResubmitTag";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, MasterData } from "../types";
 import { fmtMoney, fmtNum, fmtDate } from "../utils";
 import { ListFilter, X } from "lucide-react";
+import { balancePaymentFlag, downpaymentFlag, resolveGrossInvoiceValue } from "../paymentFlags";
 
 type ColType = "text" | "int" | "num" | "money" | "date" | "status" | "bool" | "url";
 
@@ -49,7 +53,9 @@ const COLUMNS: Col[] = [
   { key: "skids", label: "Qty of Skids", type: "num", group: "PO Received" },
   { key: "stockingLocation", label: "Stocking Location", type: "text", group: "PO Received" },
   { key: "portOfDest", label: "Port of Destination", type: "text", group: "PO Received" },
-  { key: "poValue", label: "PO Value $", type: "money", group: "PO Received" },
+  { key: "priority", label: "Priority", type: "text", group: "PO Received" },
+  { key: "poValue", label: "PO Value $ (sq ft)", type: "money", group: "PO Received" },
+  { key: "grossInvoiceValue", label: "Gross Invoice $ (m²)", type: "money", group: "PO Received" },
   { key: "totalM2", label: "Total M2", type: "num", group: "PO Received" },
   { key: "piNo", label: "PI #", type: "text", group: "PI Generated" },
   { key: "piDate", label: "PI Date", type: "date", group: "PI Generated" },
@@ -117,6 +123,7 @@ export default function OrdersPage() {
   const isFinance = isFinanceRole(user?.role);
   const isMaintainer = isOperationalAdminRole(user?.role);
   const showStockingEmailQueue = canMarkStockingEmailRole(user?.role);
+  const showPiDueQueue = canMarkPiEmailRole(user?.role);
   const { pending: pendingPi, count: pendingPiCount } = usePendingPiApprovals(isManager);
   const { pending: pendingCi, count: pendingCiCount } = usePendingCiApprovals(isFinance);
   const {
@@ -126,6 +133,8 @@ export default function OrdersPage() {
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const rejectedPi = useMemo(() => rejectedPiOrders(pos), [pos]);
   const rejectedCi = useMemo(() => rejectedCiOrders(pos), [pos]);
+  const piDueList = useMemo(() => pendingPiDue(pos), [pos]);
+  const pendingPiDueCount = piDueList.length;
   const [master, setMaster] = useState<MasterData>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<PurchaseOrder | null>(null);
@@ -134,6 +143,7 @@ export default function OrdersPage() {
   const [openCol, setOpenCol] = useState<string | null>(null);
   const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
   const [stockingEmailFilterActive, setStockingEmailFilterActive] = useState(false);
+  const [piDueFilterActive, setPiDueFilterActive] = useState(false);
 
   const load = async () => {
     const [{ pos: list }, settings] = await Promise.all([api.getOrders(), api.getSettings()]);
@@ -153,8 +163,17 @@ export default function OrdersPage() {
       pendingPi?: boolean;
       pendingCi?: boolean;
       pendingStockingEmail?: boolean;
+      pendingPiDue?: boolean;
     } | null;
-    if (!state?.openPoId && !state?.pendingPi && !state?.pendingCi && !state?.pendingStockingEmail) return;
+    if (
+      !state?.openPoId &&
+      !state?.pendingPi &&
+      !state?.pendingCi &&
+      !state?.pendingStockingEmail &&
+      !state?.pendingPiDue
+    ) {
+      return;
+    }
 
     if (state.pendingPi) {
       setFilters({ status: { search: "", selected: [PI_PENDING_STATUS] } });
@@ -164,6 +183,9 @@ export default function OrdersPage() {
     }
     if (state.pendingStockingEmail) {
       setStockingEmailFilterActive(true);
+    }
+    if (state.pendingPiDue) {
+      setPiDueFilterActive(true);
     }
     if (state.openPoId) {
       const po = pos.find((p) => p.id === state.openPoId);
@@ -202,6 +224,12 @@ export default function OrdersPage() {
 
   const applyPendingStockingEmailFilter = () => {
     setStockingEmailFilterActive(true);
+    setPiDueFilterActive(false);
+  };
+
+  const applyPiDueFilter = () => {
+    setPiDueFilterActive(true);
+    setStockingEmailFilterActive(false);
   };
 
   const pendingStockingEmailIds = useMemo(
@@ -209,7 +237,13 @@ export default function OrdersPage() {
     [pendingStockingEmail],
   );
 
-  const cellRaw = (p: PurchaseOrder, col: Col) => p[col.key];
+  const pendingPiDueIds = useMemo(() => new Set(piDueList.map((p) => p.id)), [piDueList]);
+
+  const cellRaw = (p: PurchaseOrder, col: Col) => {
+    if (col.key === "grossInvoiceValue") return resolveGrossInvoiceValue(p);
+    if (col.key === "priority") return p.priority || "Standard";
+    return p[col.key];
+  };
 
   // Distinct values per column (computed from the full set, sorted).
   const distinctByCol = useMemo(() => {
@@ -236,6 +270,7 @@ export default function OrdersPage() {
   const rows = useMemo(() => {
     return pos.filter((p) => {
       if (stockingEmailFilterActive && !pendingStockingEmailIds.has(p.id)) return false;
+      if (piDueFilterActive && !pendingPiDueIds.has(p.id)) return false;
       if (q) {
         const hay = COLUMNS.map((c) => displayValue(c, cellRaw(p, c))).join(" ").toLowerCase();
         if (!hay.includes(q.toLowerCase())) return false;
@@ -249,7 +284,7 @@ export default function OrdersPage() {
       }
       return true;
     });
-  }, [pos, q, filters, stockingEmailFilterActive, pendingStockingEmailIds]);
+  }, [pos, q, filters, stockingEmailFilterActive, pendingStockingEmailIds, piDueFilterActive, pendingPiDueIds]);
 
   const activeFilterCount = Object.values(filters).filter(
     (f) => f.search || f.selected.length,
@@ -289,6 +324,7 @@ export default function OrdersPage() {
     setFilters({});
     setQ("");
     setStockingEmailFilterActive(false);
+    setPiDueFilterActive(false);
   };
 
   const stagePill = (s: string) => {
@@ -325,6 +361,17 @@ export default function OrdersPage() {
         </span>
       );
     }
+    if (col.key === "priority") {
+      const v = String(raw || "Standard");
+      const high = v === "High";
+      return (
+        <span
+          className={`stage-pill ${high ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-700"}`}
+        >
+          {v}
+        </span>
+      );
+    }
     if (col.type === "url") {
       const v = raw ? String(raw) : "";
       if (!v) return "";
@@ -342,6 +389,40 @@ export default function OrdersPage() {
     }
     const disp = displayValue(col, raw);
     if (col.key === "poNo") return <span className="font-mono font-semibold text-slate-900">{disp}</span>;
+
+    if (col.key === "dpAmount") {
+      const flag = downpaymentFlag(p, master.downpaymentPct ?? 0.5);
+      return (
+        <span className="inline-flex items-center gap-1.5 flex-wrap justify-end">
+          <span>{disp || <span className="text-slate-300">—</span>}</span>
+          {flag && flag.kind !== "ok" && (
+            <span
+              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
+              title={`Expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
+            >
+              {flag.label}
+            </span>
+          )}
+        </span>
+      );
+    }
+    if (col.key === "bpAmount") {
+      const flag = balancePaymentFlag(p);
+      return (
+        <span className="inline-flex items-center gap-1.5 flex-wrap justify-end">
+          <span>{disp || <span className="text-slate-300">—</span>}</span>
+          {flag && flag.kind !== "ok" && (
+            <span
+              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
+              title={`Expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
+            >
+              {flag.label}
+            </span>
+          )}
+        </span>
+      );
+    }
+
     return disp || <span className="text-slate-300">—</span>;
   };
 
@@ -357,6 +438,9 @@ export default function OrdersPage() {
       )}
       {showStockingEmailQueue && pendingStockingEmailCount > 0 && (
         <StockingEmailNotice pending={pendingStockingEmail} onOpenPo={setSelected} />
+      )}
+      {showPiDueQueue && pendingPiDueCount > 0 && (
+        <PiDueNotice pending={piDueList} onOpenPo={setSelected} />
       )}
 
       <div className="bg-white rounded-lg border border-slate-200">
@@ -432,7 +516,20 @@ export default function OrdersPage() {
               Pending client emails ({pendingStockingEmailCount})
             </button>
           )}
-          {(activeFilterCount > 0 || q || stockingEmailFilterActive) && (
+          {showPiDueQueue && pendingPiDueCount > 0 && (
+            <button
+              type="button"
+              onClick={applyPiDueFilter}
+              className={`flex items-center gap-1.5 text-sm rounded-md px-2.5 py-1.5 border ${
+                piDueFilterActive
+                  ? "bg-sky-100 border-sky-400 text-sky-900 font-medium"
+                  : "border-sky-300 text-sky-800 hover:bg-sky-50"
+              }`}
+            >
+              PI due ({pendingPiDueCount})
+            </button>
+          )}
+          {(activeFilterCount > 0 || q || stockingEmailFilterActive || piDueFilterActive) && (
             <button
               type="button"
               onClick={clearAll}

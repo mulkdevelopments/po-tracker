@@ -1,10 +1,15 @@
 import type { AuthUser, PurchaseOrder, MasterData, PricingData, AppUser, ReferenceData, AppConfigData } from "./types";
-import { STAGES } from "./types";
 import type { Company } from "./companies";
+import {
+  STAGE_OWNERS,
+  hasReachedProductionComplete,
+  hasReachedContainerLoaded,
+  type WorkflowCompany,
+} from "./workflows";
 
 const TOKEN_KEY = "po_tracker_token";
 // Set VITE_API_URL in Vercel env for production. Dev/Docker use empty base → /api proxy or same origin.
-// In dev this stays empty and requests go through the Vite proxy to :4000.
+// In dev this stays empty and requests go through the Vite proxy to :4002.
 const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 let currentCompany: Company = "UFP";
 
@@ -165,6 +170,23 @@ export const api = {
       method: "POST",
     }),
 
+  markPiSent: (id: number) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/mark-pi-sent${companyParam()}`, {
+      method: "POST",
+    }),
+
+  reorderProduction: (orderedIds: number[]) =>
+    request<{ pos: PurchaseOrder[] }>(`/orders/reorder-production${companyParam()}`, {
+      method: "POST",
+      body: JSON.stringify({ orderedIds }),
+    }),
+
+  recalculateProduction: () =>
+    request<{ pos: PurchaseOrder[]; updatedCount: number }>(
+      `/orders/recalculate-production${companyParam()}`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
   downloadPiPdf: async (id: number) => {
     const token = getToken();
     const res = await fetch(`${API_BASE}/api/orders/${id}/pi-pdf${companyParam()}`, {
@@ -187,6 +209,28 @@ export const api = {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
+  downloadCiExcel: async (id: number) => {
+    const token = getToken();
+    const res = await fetch(`${API_BASE}/api/orders/${id}/ci-excel${companyParam()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "include",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || "Failed to download CI Excel");
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition");
+    const match = cd?.match(/filename=\"?([^\";]+)\"?/);
+    const filename = match?.[1] || "CI.xlsx";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
   exportData: () =>
     request<{ pos: PurchaseOrder[]; master: MasterData; pricing: PricingData; company: Company }>(
       `/orders/export${companyParam()}`,
@@ -199,6 +243,18 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+
+  updateProductPrice: (id: number, data: Record<string, unknown>) =>
+    request<{ product: ReferenceData["products"][number] }>(
+      `/reference/products/${id}/update-price${companyParam()}`,
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+
+  seedProductPrice: (id: number, data?: Record<string, unknown>) =>
+    request<{ product: ReferenceData["products"][number] }>(
+      `/reference/products/${id}/seed-price${companyParam()}`,
+      { method: "POST", body: JSON.stringify(data ?? {}) },
+    ),
 
   refCreate: (entity: string, data: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/reference/${entity}${companyParam()}`, {
@@ -284,21 +340,7 @@ export function canManageUsers(user: AuthUser): boolean {
   return user.role === "SUPER_ADMIN";
 }
 
-export const STAGE_OWNERS: Record<string, string[]> = {
-  "PO Received": ["MAINTAINER", "SUPER_ADMIN"],
-  "PI Generated": ["FINANCE", "MAINTAINER", "SUPER_ADMIN"],
-  "PI Approved": ["MANAGER", "SUPER_ADMIN"],
-  "Downpayment Received": ["FINANCE", "MAINTAINER", "SUPER_ADMIN"],
-  "In Production": ["MAINTAINER", "SUPER_ADMIN"],
-  "Production Complete": ["SUPERVISOR", "SUPER_ADMIN"],
-  "Container Loaded": ["LOGISTICS", "MAINTAINER", "SUPER_ADMIN"],
-  "CI sent": ["FINANCE", "MAINTAINER", "SUPER_ADMIN"],
-  "CI approved": ["FINANCE", "SUPER_ADMIN"],
-  BL: ["LOGISTICS", "MAINTAINER", "SUPER_ADMIN"],
-  "Balance Payment Received": ["FINANCE", "MAINTAINER", "SUPER_ADMIN"],
-  "Telex / Seaway Released": ["FINANCE", "MAINTAINER", "SUPER_ADMIN"],
-  "Arrived": ["LOGISTICS", "MAINTAINER", "SUPER_ADMIN"],
-};
+export { STAGE_OWNERS, getNextStage, getAllowedAdvanceStages, getSubstageLabel } from "./workflows";
 
 export function canAdvanceStage(user: AuthUser, stage: string): boolean {
   if (user.role === "VIEWER") return false;
@@ -310,23 +352,14 @@ export function canEditProductionActuals(user: AuthUser): boolean {
   return user.role === "SUPERVISOR" || user.role === "SUPER_ADMIN";
 }
 
-export function hasReachedProductionComplete(status: string): boolean {
-  const target = STAGES.indexOf("Production Complete");
-  if (target < 0) return false;
-  const current = STAGES.indexOf(status as (typeof STAGES)[number]);
-  return current >= target;
-}
-
-export function hasReachedContainerLoaded(status: string): boolean {
-  const target = STAGES.indexOf("Container Loaded");
-  if (target < 0) return false;
-  const current = STAGES.indexOf(status as (typeof STAGES)[number]);
-  return current >= target;
-}
-
-export function canEditProductionActualsForPo(user: AuthUser, status: string): boolean {
-  if (!hasReachedProductionComplete(status)) return false;
+export function canEditProductionActualsForPo(
+  user: AuthUser,
+  status: string,
+  company: WorkflowCompany = "UFP",
+  po?: Record<string, unknown>,
+): boolean {
+  if (!hasReachedProductionComplete(company, status, po)) return false;
   if (user.role === "SUPER_ADMIN") return true;
-  if (user.role === "SUPERVISOR") return !hasReachedContainerLoaded(status);
+  if (user.role === "SUPERVISOR") return !hasReachedContainerLoaded(company, status, po);
   return false;
 }

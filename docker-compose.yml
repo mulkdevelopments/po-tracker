@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: potracker
       POSTGRES_DB: potracker
     ports:
-      - "5435:5432"
+      - "5436:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,18 +20,22 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "4000:4000"
+      - "4002:4002"
     environment:
       DATABASE_URL: postgresql://potracker:potracker@db:5432/potracker?schema=public
       JWT_SECRET: dev-secret-change-in-production-min-32-chars-long
       SUPER_ADMIN_EMAIL: admin@ufp.local
       SUPER_ADMIN_PASSWORD: ChangeMe123!
-      FRONTEND_URL: http://localhost:4000
+      FRONTEND_URL: http://localhost:5174
       NODE_ENV: production
-      PORT: 4000
+      PORT: 4002
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
+  # Keep the original local volume (created as project "ufptracker") so
+  # `docker compose up db` does not spin up an empty potracker_pgdata.
   pgdata:
+    external: true
+    name: ufptracker_pgdata

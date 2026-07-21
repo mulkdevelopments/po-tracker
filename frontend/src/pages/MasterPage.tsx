@@ -185,24 +185,63 @@ function EditableTable({
 }
 
 function ProductionCapacityCard({ ref, canEdit, onSaved }: { ref: ReferenceData; canEdit: boolean; onSaved: () => Promise<void> }) {
-  const cfg = ref.config;
-  const [draft, setDraft] = useState({
-    productionLines: cfg?.productionLines ?? 2,
-    m2PerLinePerDay: cfg?.m2PerLinePerDay ?? 3000,
-    m2PerContainer: cfg?.m2PerContainer ?? 8300,
-    workingDaysPerMonth: cfg?.workingDaysPerMonth ?? 26,
-  });
+  const periods = ref.capacityPeriods ?? [];
+  const empty = {
+    effectiveFrom: new Date().toISOString().slice(0, 10),
+    effectiveTo: "",
+    label: "",
+    productionLines: ref.config?.productionLines ?? 2,
+    m2PerLinePerDay: ref.config?.m2PerLinePerDay ?? 3000,
+    m2PerContainer: ref.config?.m2PerContainer ?? 8300,
+    workingDaysPerMonth: ref.config?.workingDaysPerMonth ?? 26,
+  };
+  const [editing, setEditing] = useState<number | "new" | null>(null);
+  const [draft, setDraft] = useState(empty);
   const [busy, setBusy] = useState(false);
 
+  const openNew = () => {
+    setDraft({ ...empty });
+    setEditing("new");
+  };
+  const openEdit = (p: (typeof periods)[number]) => {
+    setDraft({
+      effectiveFrom: p.effectiveFrom,
+      effectiveTo: p.effectiveTo ?? "",
+      label: p.label ?? "",
+      productionLines: p.productionLines,
+      m2PerLinePerDay: p.m2PerLinePerDay,
+      m2PerContainer: p.m2PerContainer,
+      workingDaysPerMonth: p.workingDaysPerMonth,
+    });
+    setEditing(p.id);
+  };
+
   const save = async () => {
+    if (!draft.effectiveFrom.trim()) {
+      alert("Effective from date is required");
+      return;
+    }
     setBusy(true);
     try {
+      const payload = {
+        effectiveFrom: draft.effectiveFrom,
+        effectiveTo: draft.effectiveTo || null,
+        label: draft.label || null,
+        productionLines: Number(draft.productionLines),
+        m2PerLinePerDay: Number(draft.m2PerLinePerDay),
+        m2PerContainer: Number(draft.m2PerContainer),
+        workingDaysPerMonth: Number(draft.workingDaysPerMonth),
+      };
+      if (editing === "new") await api.refCreate("capacity-periods", payload);
+      else if (typeof editing === "number") await api.refUpdate("capacity-periods", editing, payload);
+      // Keep AppConfig in sync with the latest open-ended / newest period for legacy readers
       await api.updateConfig({
-        productionLines: draft.productionLines,
-        m2PerLinePerDay: draft.m2PerLinePerDay,
-        m2PerContainer: draft.m2PerContainer,
-        workingDaysPerMonth: draft.workingDaysPerMonth,
+        productionLines: payload.productionLines,
+        m2PerLinePerDay: payload.m2PerLinePerDay,
+        m2PerContainer: payload.m2PerContainer,
+        workingDaysPerMonth: payload.workingDaysPerMonth,
       });
+      setEditing(null);
       await onSaved();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Save failed");
@@ -211,50 +250,100 @@ function ProductionCapacityCard({ ref, canEdit, onSaved }: { ref: ReferenceData;
     }
   };
 
-  const m2PerMonth = draft.productionLines * draft.m2PerLinePerDay * draft.workingDaysPerMonth;
-  const containersPerMonth = draft.m2PerContainer ? m2PerMonth / draft.m2PerContainer : 0;
-
-  const fields: { k: keyof typeof draft; label: string; suffix?: string }[] = [
-    { k: "productionLines", label: "Production lines" },
-    { k: "m2PerLinePerDay", label: "m² per line per day", suffix: "m²" },
-    { k: "m2PerContainer", label: "m² per container", suffix: "m²" },
-    { k: "workingDaysPerMonth", label: "Working days per month", suffix: "days" },
-  ];
+  const remove = async (id: number) => {
+    if (!confirm("Delete this capacity period?")) return;
+    try {
+      await api.refDelete("capacity-periods", id);
+      await onSaved();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Delete failed");
+    }
+  };
 
   return (
     <div className="space-y-3 text-sm">
       <p className="text-xs text-slate-500">
-        Drives the Dashboard <b className="text-slate-700">Production — Actual vs Capacity</b> chart. Theoretical capacity =
-        lines × m²/line/day × working days; containers = m²/month ÷ m²/container.
+        Capacity periods have effective dates. The dashboard uses the period that covers each month.
+        Leave <b>Effective to</b> blank for an open-ended (current) period.
       </p>
-      <div className="grid grid-cols-1 gap-2">
-        {fields.map((f) => (
-          <div key={f.k} className="flex items-center justify-between gap-2">
-            <span className="text-slate-600">{f.label}</span>
-            {canEdit ? (
-              <div className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min={f.k === "workingDaysPerMonth" ? 1 : 0}
-                  value={draft[f.k]}
-                  onChange={(e) => setDraft({ ...draft, [f.k]: Number(e.target.value) })}
-                  className="w-28 border border-slate-300 rounded px-2 py-1 text-sm text-right"
-                />
-                {f.suffix && <span className="text-xs text-slate-400 w-10">{f.suffix}</span>}
-              </div>
-            ) : (
-              <b>{draft[f.k]}{f.suffix ? ` ${f.suffix}` : ""}</b>
+      <div className="overflow-x-auto border border-slate-200 rounded-md">
+        <table className="tbl w-full text-xs">
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>From</th>
+              <th>To</th>
+              <th className="text-right">Lines</th>
+              <th className="text-right">m²/line/day</th>
+              <th className="text-right">m²/ctr</th>
+              <th className="text-right">Days</th>
+              {canEdit && <th></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {periods.map((p) => (
+              <tr key={p.id}>
+                <td>{p.label || "—"}</td>
+                <td className="font-mono">{p.effectiveFrom}</td>
+                <td className="font-mono">{p.effectiveTo || "open"}</td>
+                <td className="text-right">{p.productionLines}</td>
+                <td className="text-right">{p.m2PerLinePerDay}</td>
+                <td className="text-right">{p.m2PerContainer}</td>
+                <td className="text-right">{p.workingDaysPerMonth}</td>
+                {canEdit && (
+                  <td className="whitespace-nowrap">
+                    <button type="button" onClick={() => openEdit(p)} className="text-indigo-600 hover:underline mr-2">Edit</button>
+                    <button type="button" onClick={() => void remove(p.id)} className="text-red-600 hover:underline">Delete</button>
+                  </td>
+                )}
+              </tr>
+            ))}
+            {periods.length === 0 && (
+              <tr><td colSpan={canEdit ? 8 : 7} className="text-center text-slate-400 py-4">No capacity periods yet.</td></tr>
             )}
-          </div>
-        ))}
+          </tbody>
+        </table>
       </div>
-      <div className="rounded-md bg-blue-50 text-blue-900 px-3 py-2 text-xs">
-        <b>Preview:</b> {containersPerMonth.toFixed(1)} containers/month ({fmtNum(m2PerMonth, 0)} m²)
-      </div>
-      {canEdit && (
-        <button type="button" disabled={busy} onClick={save} className="self-end px-3 py-1.5 bg-indigo-600 text-white text-xs rounded-md disabled:opacity-50">
-          {busy ? "Saving…" : "Save capacity settings"}
+
+      {canEdit && editing == null && (
+        <button type="button" onClick={openNew} className="text-xs px-2 py-1 border border-slate-300 rounded-md hover:bg-slate-50">
+          + Add capacity period
         </button>
+      )}
+
+      {canEdit && editing != null && (
+        <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
+          <div className="text-xs font-semibold text-slate-700">{editing === "new" ? "New period" : "Edit period"}</div>
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ["label", "Label", "text"],
+                ["effectiveFrom", "Effective from", "date"],
+                ["effectiveTo", "Effective to (blank = open)", "date"],
+                ["productionLines", "Production lines", "number"],
+                ["m2PerLinePerDay", "m² per line per day", "number"],
+                ["m2PerContainer", "m² per container", "number"],
+                ["workingDaysPerMonth", "Working days / month", "number"],
+              ] as const
+            ).map(([k, label, type]) => (
+              <label key={k} className="text-xs text-slate-600">
+                {label}
+                <input
+                  type={type}
+                  className="mt-0.5 w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                  value={String(draft[k] ?? "")}
+                  onChange={(e) => setDraft({ ...draft, [k]: e.target.value })}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button type="button" onClick={() => setEditing(null)} className="px-3 py-1.5 text-xs border border-slate-300 rounded-md">Cancel</button>
+            <button type="button" disabled={busy} onClick={() => void save()} className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md disabled:opacity-50">
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -457,6 +546,69 @@ function ProductionSitesCard({
         className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md disabled:opacity-50"
       >
         {busy ? "Saving…" : "Save production sites"}
+      </button>
+    </div>
+  );
+}
+
+function PiEmailsCard({
+  master,
+  canEdit,
+  onSaved,
+}: {
+  master: Record<string, unknown>;
+  canEdit: boolean;
+  onSaved: () => Promise<void>;
+}) {
+  const initial = typeof master.piInternalEmails === "string" ? master.piInternalEmails : "";
+  const [emails, setEmails] = useState(initial);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setEmails(typeof master.piInternalEmails === "string" ? master.piInternalEmails : "");
+  }, [master]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.updateSettings({
+        master: { ...master, piInternalEmails: emails.trim() },
+      });
+      await onSaved();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!canEdit) {
+    return (
+      <p className="text-sm text-slate-600">
+        {emails.trim() || <span className="text-slate-400">No internal PI recipients configured.</span>}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="text-xs text-slate-500">
+        Comma-separated internal emails for Proforma Invoice distribution (mailto from the PO drawer).
+      </p>
+      <input
+        type="text"
+        value={emails}
+        onChange={(e) => setEmails(e.target.value)}
+        placeholder="ops@example.com, finance@example.com"
+        className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
+      />
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void save()}
+        className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md disabled:opacity-50"
+      >
+        {busy ? "Saving…" : "Save PI emails"}
       </button>
     </div>
   );
@@ -683,6 +835,10 @@ export default function MasterPage() {
 
       <Card title="Production Sites">
         <ProductionSitesCard master={master} canEdit={writable} onSaved={load} />
+      </Card>
+
+      <Card title="PI internal emails">
+        <PiEmailsCard master={master} canEdit={writable} onSaved={load} />
       </Card>
 
       <Card title={`Colors (${ref.colors.length})`} wide>

@@ -25,7 +25,7 @@ Production-ready purchase order tracking application for UFP — from PO receipt
 docker compose up --build
 ```
 
-Open http://localhost:4000
+Open http://localhost:4002
 
 **Default super admin** (change after first login):
 
@@ -51,7 +51,7 @@ npm run db:seed
 npm run dev
 ```
 
-API runs at http://localhost:4000
+API runs at http://localhost:4002
 
 ### 3. Frontend
 
@@ -61,7 +61,7 @@ npm install
 npm run dev
 ```
 
-App at http://localhost:5173 (proxies `/api` to backend)
+App at http://localhost:5174 (proxies `/api` to backend)
 
 ## User roles & permissions
 
@@ -101,7 +101,7 @@ The frontend does **not** store the API URL in the repo. Set it in Vercel:
 
 On Render, set `FRONTEND_URL` to your frontend URL(s), comma-separated (e.g. `https://tracker.mulkinternational.co,https://po-tracker-eight.vercel.app`) for CORS. The API also allows `*.mulkinternational.co` and `*.vercel.app` origins.
 
-Local dev: leave `VITE_API_URL` unset; Vite proxies `/api` to the backend on port 4000.
+Local dev: leave `VITE_API_URL` unset; Vite proxies `/api` to the backend on port 4002.
 
 ## Project structure
 

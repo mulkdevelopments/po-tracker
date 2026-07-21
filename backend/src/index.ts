@@ -12,16 +12,18 @@ import orderRoutes from "./routes/orders.js";
 import settingsRoutes from "./routes/settings.js";
 import uploadRoutes from "./routes/upload.js";
 import referenceRoutes from "./routes/reference.js";
+import ecosystemRoutes from "./routes/ecosystem.js";
+import jobsRoutes from "./routes/jobs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = Number(process.env.PORT) || 4000;
+const PORT = Number(process.env.PORT) || 4002;
 
 app.use(helmet({ contentSecurityPolicy: false }));
 
 // Allow the configured frontend origin(s) plus Vercel preview deployments.
 // FRONTEND_URL may be a comma-separated list.
-const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5174")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -65,6 +67,8 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/reference", referenceRoutes);
+app.use("/api/ecosystem", ecosystemRoutes);
+app.use("/api/jobs", jobsRoutes);
 
 const frontendCandidates = [
   path.join(__dirname, "../frontend/dist"),
