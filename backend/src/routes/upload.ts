@@ -70,6 +70,7 @@ function lineFromProduct(
   sheetsPerSkid: number,
   asOf: string,
   skidsOverride?: number | null,
+  pdf?: { amount?: number | null; unitMsf?: number | null; qtyMsf?: number | null },
 ) {
   const rates = pickPriceForDate(p.prices ?? [], asOf) ?? ratesFromProduct(p, asOf);
   const pricePerM2 = rates?.pricePerM2 ?? null;
@@ -79,10 +80,18 @@ function lineFromProduct(
   const m2PerSheet = p.widthMm && p.lengthMm ? (p.widthMm * p.lengthMm) / 1_000_000 : null;
   const sqftPerSheet = p.widthIn && p.lengthIn ? (p.widthIn * p.lengthIn) / 144 : null;
   const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
-  const qtyMsf = sheets != null && sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
-  let extPo: number | null = null;
-  if (sheets != null && pricePerSheet != null) extPo = sheets * pricePerSheet;
-  else if (qtyM2 != null && pricePerM2 != null) extPo = qtyM2 * pricePerM2;
+  const qtyMsf =
+    pdf?.qtyMsf != null
+      ? pdf.qtyMsf
+      : sheets != null && sqftPerSheet != null
+        ? (sheets * sqftPerSheet) / 1000
+        : null;
+  // Catalog (PI) value — sheets × sheet price, else m² × $/m²
+  let catalogExt: number | null = null;
+  if (sheets != null && pricePerSheet != null) catalogExt = sheets * pricePerSheet;
+  else if (qtyM2 != null && pricePerM2 != null) catalogExt = qtyM2 * pricePerM2;
+  // PO line value — prefer PDF amount when present
+  const extPo = pdf?.amount != null ? pdf.amount : catalogExt;
   const sizeLabel = [p.thickness, p.widthIn ? `${p.widthIn}"` : "", p.lengthIn ? `x ${p.lengthIn}"` : "", p.construction]
     .filter(Boolean)
     .join(" ");
@@ -101,10 +110,12 @@ function lineFromProduct(
     unitMsf: pricePerMsq,
     unitM2: pricePerM2,
     extPo,
+    catalogExt,
     leadTime: leadTimeDays,
     priceAsOf: rates ? asOf : null,
     priceEffectiveFrom: rates?.effectiveFrom ?? null,
     matched: true,
+    fromPdf: pdf?.amount != null,
   };
 }
 
@@ -115,11 +126,55 @@ interface Ref {
   sheetsPerSkid: number;
 }
 
+function parseMoney(raw: string): number | null {
+  const n = Number(String(raw).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** UFP footer: Total:$    65,006.90 */
+function parsePdfPoTotal(text: string): number | null {
+  const m = text.match(/Total\s*:?\s*\$?\s*([\d,]+\.\d{2})\b/i);
+  if (!m?.[1]) return null;
+  return parseMoney(m[1]);
+}
+
+/** Near a part #: PRICE/UNIT …/MSF and AMOUNT $… */
+function parsePdfLinePricing(ctx: string): {
+  amount: number | null;
+  unitMsf: number | null;
+  qtyMsf: number | null;
+} {
+  const amountM =
+    ctx.match(/\$\s*([\d,]+\.\d{2})\b/) ||
+    ctx.match(/AMOUNT\s*\$?\s*([\d,]+\.\d{2})/i);
+  const unitM = ctx.match(/([\d,]+\.?\d*)\s*\/\s*MSF\b/i);
+  const qtyM = ctx.match(/([\d,]+\.?\d*)\s*MSF\b/i);
+  const unitMsf = unitM?.[1] ? parseMoney(unitM[1]) : null;
+  const qtyMsf = qtyM?.[1] ? parseMoney(qtyM[1]) : null;
+  let amount = amountM?.[1] ? parseMoney(amountM[1]) : null;
+  if (amount == null && unitMsf != null && qtyMsf != null) {
+    amount = Math.round(unitMsf * qtyMsf * 100) / 100;
+  }
+  return { amount, unitMsf, qtyMsf };
+}
+
 function summarizeLines(lines: Record<string, unknown>[]) {
-  const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const catalogValue = lines.reduce((s, l) => {
+    const cat = Number(l.catalogExt);
+    if (Number.isFinite(cat) && cat) return s + cat;
+    return s + (Number(l.extPo) || 0);
+  }, 0);
+  const pdfLineSum = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
   const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
   const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
-  return { poValue: poValue || null, totalM2: totalM2 || null, skids: skids || null };
+  return {
+    /** Catalog / calculated — drives PI value */
+    piValue: catalogValue || null,
+    /** Sum of line extPo (PDF amounts when present) */
+    pdfLineSum: pdfLineSum || null,
+    totalM2: totalM2 || null,
+    skids: skids || null,
+  };
 }
 
 function guessFields(text: string, ref: Ref) {
@@ -162,7 +217,7 @@ function guessFields(text: string, ref: Ref) {
 
   const asOf = String(out.poDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
 
-  // Lines: find each part number in the text and enrich from the catalog.
+  // Lines: find each part number in the text and enrich from the catalog + PDF pricing.
   const lines: Record<string, unknown>[] = [];
   const seen = new Set<string>();
   const partRe = /\b(6\d{5})\b/g;
@@ -174,9 +229,11 @@ function guessFields(text: string, ref: Ref) {
     const product = productByPart.get(partNo);
     if (!product) continue;
     seen.add(partNo);
-    const ctx = clean.slice(m.index, Math.min(clean.length, m.index + 220));
+    // Look ahead far enough to catch MSF rate + $ amount after the part # block
+    const ctx = clean.slice(Math.max(0, m.index - 40), Math.min(clean.length, m.index + 420));
     const { sheets, skids } = parseLineQty(ctx, ref.sheetsPerSkid);
-    lines.push(lineFromProduct(product, ++idx, sheets, ref.sheetsPerSkid, asOf, skids));
+    const pdf = parsePdfLinePricing(ctx);
+    lines.push(lineFromProduct(product, ++idx, sheets, ref.sheetsPerSkid, asOf, skids, pdf));
   }
 
   // Fallback: if no catalog parts matched, do best-effort size/color extraction.
@@ -197,6 +254,7 @@ function guessFields(text: string, ref: Ref) {
         skids: null,
         unitMsf: null,
         extPo: null,
+        catalogExt: null,
         matched: false,
       });
     }
@@ -207,7 +265,14 @@ function guessFields(text: string, ref: Ref) {
   const poNo = String(out.poNo ?? "").trim();
   const rev = Number(out.rev) || 0;
   if (poNo) out.concat = `${poNo}-${rev}`;
-  Object.assign(out, summarizeLines(lines));
+  const sums = summarizeLines(lines);
+  const pdfTotal = parsePdfPoTotal(clean);
+  // PO value = PDF Total (preferred), else sum of PDF line amounts
+  out.poValue = pdfTotal ?? sums.pdfLineSum;
+  // PI value = catalog calculated rates
+  out.piValue = sums.piValue;
+  out.totalM2 = sums.totalM2;
+  out.skids = sums.skids;
   return out;
 }
 

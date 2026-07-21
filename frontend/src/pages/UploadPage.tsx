@@ -33,7 +33,8 @@ type SynergyBatchItem = {
 };
 
 // Header fields computed automatically on upload — shown read-only to cut manual entry.
-const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "grossInvoiceValue", "totalM2", "skids", "status"]);
+// poValue comes from the PDF Total (set on decode, not overwritten by catalog).
+const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "piValue", "grossInvoiceValue", "totalM2", "skids", "status"]);
 
 const toStr = (v: unknown) => (v == null ? "" : String(v));
 
@@ -42,12 +43,27 @@ function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number |
   return Math.ceil(sheets / sheetsPerSkid);
 }
 
+/** Catalog line value (drives PI value) — prefers stamped catalogExt from decode/compute */
+function lineCatalogValue(l: LineForm): number {
+  const cat = Number(l.catalogExt);
+  if (Number.isFinite(cat) && cat) return cat;
+  return 0;
+}
+
 function summarizeLines(lines: LineForm[]) {
-  const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
-  const grossInvoiceValue = lines.reduce((s, l) => s + (Number(l.extInv) || 0), 0);
+  const catalogValue = lines.reduce((s, l) => s + lineCatalogValue(l), 0);
+  const pdfLineSum = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const grossInvoiceValue = lines.reduce((s, l) => {
+    const inv = Number(l.extInv);
+    if (Number.isFinite(inv) && inv) return s + inv;
+    const qtyM2 = Number(l.qtyM2);
+    const unitM2 = Number(l.unitM2);
+    if (Number.isFinite(qtyM2) && Number.isFinite(unitM2)) return s + qtyM2 * unitM2;
+    return s;
+  }, 0);
   const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
   const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
-  return { poValue, grossInvoiceValue, totalM2, skids };
+  return { catalogValue, pdfLineSum, piValue: catalogValue, grossInvoiceValue, totalM2, skids };
 }
 
 function blankForm(): Record<string, string> {
@@ -64,6 +80,8 @@ function blankForm(): Record<string, string> {
 function lineToForm(l: Record<string, unknown>): LineForm {
   const row: LineForm = {};
   for (const c of LINE_COLS) row[c.k as string] = toStr(l[c.k as string]);
+  if (l.catalogExt != null) row.catalogExt = toStr(l.catalogExt);
+  if (l.fromPdf != null) row.fromPdf = l.fromPdf === true || l.fromPdf === "true" ? "true" : "";
   return row;
 }
 
@@ -71,6 +89,7 @@ function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: b
   const gLines = (g.lines as Record<string, unknown>[]) || [];
   const lines = gLines.map(lineToForm);
   const totals = summarizeLines(lines);
+  const pdfPo = g.poValue != null ? Number(g.poValue) : NaN;
   return {
     siNo: String(siNo),
     poNo: toStr(g.poNo),
@@ -79,7 +98,12 @@ function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: b
     stockingLocation: toStr(g.stockingLocation),
     portOfDest: toStr(g.portOfDest),
     concat: toStr(g.concat) || (toStr(g.poNo) ? `${toStr(g.poNo)}-${toStr(g.rev ?? 0)}` : ""),
-    poValue: g.poValue != null ? toStr(g.poValue) : totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
+    poValue: Number.isFinite(pdfPo)
+      ? String(Math.round(pdfPo * 100) / 100)
+      : totals.pdfLineSum
+        ? String(Math.round(totals.pdfLineSum * 100) / 100)
+        : "",
+    piValue: totals.piValue ? String(Math.round(totals.piValue * 100) / 100) : "",
     grossInvoiceValue:
       g.grossInvoiceValue != null
         ? toStr(g.grossInvoiceValue)
@@ -205,14 +229,14 @@ export default function UploadPage() {
 
   const totals = useMemo(() => summarizeLines(lines), [lines]);
 
-  // Keep derived header fields in sync with PO #, rev, and line totals.
+  // Keep derived header fields in sync. PO value stays from PDF (not catalog).
   useEffect(() => {
     const rev = Math.round(Number(form.rev || 0)) || 0;
     const poNo = form.poNo.trim();
     setForm((f) => ({
       ...f,
       concat: poNo ? `${poNo}-${rev}` : "",
-      poValue: totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
+      piValue: totals.piValue ? String(Math.round(totals.piValue * 100) / 100) : "",
       grossInvoiceValue: totals.grossInvoiceValue
         ? String(Math.round(totals.grossInvoiceValue * 100) / 100)
         : "",
@@ -221,7 +245,7 @@ export default function UploadPage() {
       status: "PO Received",
       priority: f.priority || "Standard",
     }));
-  }, [form.poNo, form.rev, totals.poValue, totals.grossInvoiceValue, totals.totalM2, totals.skids]);
+  }, [form.poNo, form.rev, totals.piValue, totals.grossInvoiceValue, totals.totalM2, totals.skids]);
 
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {
@@ -253,13 +277,20 @@ export default function UploadPage() {
           const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
           const pps = rates?.pricePerSheet ?? null;
           const ppm2 = rates?.pricePerM2 ?? null;
-          let extPo: number | null = null;
-          if (sheets != null && pps != null) extPo = sheets * pps;
-          else if (qtyM2 != null && ppm2 != null) extPo = qtyM2 * ppm2;
+          let catalogExt: number | null = null;
+          if (sheets != null && pps != null) catalogExt = sheets * pps;
+          else if (qtyM2 != null && ppm2 != null) catalogExt = qtyM2 * ppm2;
+          const fromPdf = row.fromPdf === "true" || row.fromPdf === "1";
           return {
             ...filled,
             qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : filled.qtyM2,
-            extPo: extPo != null ? String(Math.round(extPo * 100) / 100) : filled.extPo,
+            catalogExt: catalogExt != null ? String(Math.round(catalogExt * 100) / 100) : filled.catalogExt,
+            extPo:
+              fromPdf && filled.extPo
+                ? filled.extPo
+                : catalogExt != null
+                  ? String(Math.round(catalogExt * 100) / 100)
+                  : filled.extPo,
           };
         }),
       );
@@ -290,6 +321,7 @@ export default function UploadPage() {
   const priceAsOfDate = () => (form.poDate?.trim() || todayISO()).slice(0, 10);
 
   // Recompute derived line numbers (m²/MSF/value) from sheets + product/dims.
+  // Catalog → catalogExt (PI). PDF extPo is preserved when present.
   const computeLine = (row: LineForm): LineForm => {
     const product = row.partNo ? productMap.get(row.partNo) : undefined;
     const asOf = priceAsOfDate();
@@ -305,15 +337,23 @@ export default function UploadPage() {
     const qtyMsf = sheets != null && sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
     const pps = rates?.pricePerSheet ?? null;
     const ppm2 = rates?.pricePerM2 ?? (row.unitM2 ? Number(row.unitM2) : null);
-    let extPo: number | null = null;
-    if (sheets != null && pps != null) extPo = sheets * pps;
-    else if (qtyM2 != null && ppm2 != null) extPo = qtyM2 * ppm2;
+    let catalogExt: number | null = null;
+    if (sheets != null && pps != null) catalogExt = sheets * pps;
+    else if (qtyM2 != null && ppm2 != null) catalogExt = qtyM2 * ppm2;
+    const fromPdf = row.fromPdf === "true" || row.fromPdf === "1";
     const skids = skidsFromSheets(sheets, sheetsPerSkid);
     return {
       ...row,
       qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : row.qtyM2,
       qtyMsf: qtyMsf != null ? String(Math.round(qtyMsf * 1000) / 1000) : row.qtyMsf,
-      extPo: extPo != null ? String(Math.round(extPo * 100) / 100) : row.extPo,
+      catalogExt: catalogExt != null ? String(Math.round(catalogExt * 100) / 100) : row.catalogExt ?? "",
+      // Keep PDF line amount; only fill from catalog when no PDF amount
+      extPo:
+        fromPdf && row.extPo
+          ? row.extPo
+          : catalogExt != null
+            ? String(Math.round(catalogExt * 100) / 100)
+            : row.extPo,
       skids: skids != null ? String(skids) : row.skids,
       priceAsOf: rates ? asOf : row.priceAsOf ?? "",
       priceEffectiveFrom: rates ? rates.effectiveFrom : row.priceEffectiveFrom ?? "",
@@ -371,7 +411,9 @@ export default function UploadPage() {
 
   const applyGuess = (g: Record<string, unknown>, batchPage?: number) => {
     const gLines = (g.lines as Record<string, unknown>[]) || [];
-    const computed = summarizeLines(gLines.map(lineToForm));
+    const formLines = gLines.map(lineToForm);
+    const computed = summarizeLines(formLines);
+    const pdfPo = g.poValue != null ? Number(g.poValue) : NaN;
     setForm((f) => ({
       ...f,
       poNo: toStr(g.poNo) || f.poNo,
@@ -380,12 +422,24 @@ export default function UploadPage() {
       stockingLocation: toStr(g.stockingLocation) || f.stockingLocation,
       portOfDest: toStr(g.portOfDest) || f.portOfDest,
       concat: toStr(g.concat) || f.concat,
-      poValue: g.poValue != null ? toStr(g.poValue) : (computed.poValue ? String(computed.poValue) : f.poValue),
+      poValue: Number.isFinite(pdfPo)
+        ? String(Math.round(pdfPo * 100) / 100)
+        : computed.pdfLineSum
+          ? String(Math.round(computed.pdfLineSum * 100) / 100)
+          : f.poValue,
+      piValue: g.piValue != null
+        ? toStr(g.piValue)
+        : computed.piValue
+          ? String(Math.round(computed.piValue * 100) / 100)
+          : f.piValue,
+      grossInvoiceValue: computed.grossInvoiceValue
+        ? String(Math.round(computed.grossInvoiceValue * 100) / 100)
+        : f.grossInvoiceValue,
       totalM2: g.totalM2 != null ? toStr(g.totalM2) : (computed.totalM2 ? String(computed.totalM2) : f.totalM2),
       skids: g.skids != null ? toStr(g.skids) : (computed.skids ? String(computed.skids) : f.skids),
       status: "PO Received",
     }));
-    setLines(gLines.map(lineToForm));
+    setLines(formLines);
     if (batchPage != null) setActiveBatchPage(batchPage);
     const matched = Number(g.matchedCount) || 0;
     const pageNote = batchPage != null ? ` (page ${batchPage})` : "";
@@ -580,7 +634,8 @@ export default function UploadPage() {
     try {
       if (activeBatchPage != null) setSynergyBatch(mergeEditorIntoBatch(synergyBatch));
       const payload: Record<string, unknown> = { ...form, active };
-      if (!form.poValue) payload.poValue = totals.poValue || null;
+      if (!form.poValue) payload.poValue = totals.pdfLineSum || null;
+      if (!form.piValue) payload.piValue = totals.piValue || null;
       if (!form.grossInvoiceValue) payload.grossInvoiceValue = totals.grossInvoiceValue || null;
       if (!form.priority) payload.priority = "Standard";
       if (!form.totalM2) payload.totalM2 = totals.totalM2 || null;
@@ -865,8 +920,8 @@ export default function UploadPage() {
           <div className="ml-auto text-xs text-slate-500 text-right">
             <div>SI #{form.siNo || "—"} · {form.concat || "—"}</div>
             <div>
-              {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · PO {fmtMoney(totals.poValue)} · Gross{" "}
-              {fmtMoney(totals.grossInvoiceValue)} · {totals.skids || 0} skids
+              {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · PO {fmtMoney(Number(form.poValue) || totals.pdfLineSum)} · PI{" "}
+              {fmtMoney(totals.piValue)} · Gross {fmtMoney(totals.grossInvoiceValue)} · {totals.skids || 0} skids
             </div>
           </div>
         </div>

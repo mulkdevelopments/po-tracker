@@ -26,7 +26,8 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "stockingLocation", label: "Stocking Location" },
       { k: "portOfDest", label: "Port of Destination" },
       { k: "priority", label: "Priority", type: "select", options: ["Standard", "High"] },
-      { k: "poValue", label: "PO Value $ (sq ft)", type: "number" },
+      { k: "poValue", label: "PO Value $ (from PDF)", type: "number" },
+      { k: "piValue", label: "PI Value $ (calculated)", type: "number" },
       { k: "grossInvoiceValue", label: "Gross Invoice Value $ (m²)", type: "number" },
       { k: "totalM2", label: "Total M2", type: "number" },
       { k: "productionSite", label: "Production Site" },
@@ -45,7 +46,7 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "piNo", label: "PI #" },
       { k: "piDate", label: "PI Date", type: "date" },
       { k: "poToPi", label: "PO to PI", type: "number" },
-      { k: "piValue", label: "PI Value (Gross)", type: "number" },
+      { k: "piValue", label: "PI Value $ (calculated)", type: "number" },
     ],
   },
   {
