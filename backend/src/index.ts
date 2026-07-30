@@ -15,6 +15,7 @@ import referenceRoutes from "./routes/reference.js";
 import ecosystemRoutes from "./routes/ecosystem.js";
 import jobsRoutes from "./routes/jobs.js";
 import cynergyFormRoutes from "./routes/cynergyForm.js";
+import cynergyPublicFormRoutes from "./routes/cynergyPublicForm.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -22,9 +23,12 @@ const PORT = Number(process.env.PORT) || 4002;
 
 app.use(helmet({ contentSecurityPolicy: false }));
 
-// Allow the configured frontend origin(s) plus Vercel preview deployments.
-// FRONTEND_URL may be a comma-separated list.
-const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5174")
+// Allow Tracker + Cynergy form frontends. FRONTEND_URL may be comma-separated.
+// Also allows *.vercel.app and *.mulkinternational.co (see origin check below).
+const allowedOrigins = (
+  process.env.FRONTEND_URL ||
+  "http://localhost:5174,http://localhost:5175,https://cynergyform.vercel.app"
+)
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -71,6 +75,8 @@ app.use("/api/reference", referenceRoutes);
 app.use("/api/ecosystem", ecosystemRoutes);
 app.use("/api/jobs", jobsRoutes);
 app.use("/api/cynergy-form", cynergyFormRoutes);
+// Public Cynergy form (catalog / submit / submitter inbox) — no JWT
+app.use("/api", cynergyPublicFormRoutes);
 
 const frontendCandidates = [
   path.join(__dirname, "../frontend/dist"),
