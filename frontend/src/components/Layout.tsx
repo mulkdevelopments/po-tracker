@@ -15,6 +15,7 @@ import CiApprovalNotice from "./CiApprovalNotice";
 const NAV = [
   { to: "/dashboard", label: "Dashboard", shortLabel: "Dashboard", page: "dashboard" },
   { to: "/orders", label: "Order Summary", shortLabel: "Orders", page: "orders" },
+  { to: "/cynergy-forms", label: "Cynergy Forms", shortLabel: "Cynergy", page: "cynergy-forms" },
   { to: "/production", label: "Production Schedule", shortLabel: "Production", page: "production" },
   { to: "/upload", label: "Upload PO", shortLabel: "Upload", page: "upload" },
   { to: "/items", label: "Item Summary", shortLabel: "Items", page: "items" },

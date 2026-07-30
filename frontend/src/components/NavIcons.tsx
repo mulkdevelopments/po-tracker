@@ -10,6 +10,7 @@ import {
   Factory,
   MoreHorizontal,
   Menu,
+  ClipboardPen,
 } from "lucide-react";
 
 export const NAV_ICONS: Record<string, LucideIcon> = {
@@ -17,6 +18,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   orders: ClipboardList,
   production: Factory,
   upload: Upload,
+  "cynergy-forms": ClipboardPen,
   items: Package,
   pricing: Tag,
   master: Database,

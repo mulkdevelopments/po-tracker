@@ -42,6 +42,7 @@ export const PAGES = [
   "orders",
   "production",
   "upload",
+  "cynergy-forms",
   "items",
   "pricing",
   "master",
@@ -68,11 +69,11 @@ export const ROLE_LABELS: Record<string, string> = {
 
 export const DEFAULT_RESTRICTED_BY_ROLE: Record<string, Page[]> = {
   MAINTAINER: ["users"],
-  MANAGER: ["upload", "pricing", "master", "users"],
-  FINANCE: ["upload", "pricing", "master", "users"],
-  LOGISTICS: ["upload", "pricing", "master", "users"],
-  SUPERVISOR: ["upload", "pricing", "master", "users"],
-  VIEWER: ["upload", "pricing", "master", "users"],
+  MANAGER: ["upload", "cynergy-forms", "pricing", "master", "users"],
+  FINANCE: ["upload", "cynergy-forms", "pricing", "master", "users"],
+  LOGISTICS: ["upload", "cynergy-forms", "pricing", "master", "users"],
+  SUPERVISOR: ["upload", "cynergy-forms", "pricing", "master", "users"],
+  VIEWER: ["upload", "cynergy-forms", "pricing", "master", "users"],
 };
 
 export function isOperationalAdmin(role: string): boolean {

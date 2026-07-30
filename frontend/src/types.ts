@@ -44,7 +44,17 @@ export const ROLE_LABELS: Record<string, string> = {
 
 export const ASSIGNABLE_ROLES = ["MAINTAINER", "MANAGER", "FINANCE", "LOGISTICS", "SUPERVISOR", "VIEWER"] as const;
 
-export const PAGES = ["dashboard", "orders", "production", "upload", "items", "pricing", "master", "users"] as const;
+export const PAGES = [
+  "dashboard",
+  "orders",
+  "production",
+  "upload",
+  "cynergy-forms",
+  "items",
+  "pricing",
+  "master",
+  "users",
+] as const;
 export type Page = (typeof PAGES)[number];
 
 export interface AuthUser {

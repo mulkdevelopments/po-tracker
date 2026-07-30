@@ -14,6 +14,7 @@ import uploadRoutes from "./routes/upload.js";
 import referenceRoutes from "./routes/reference.js";
 import ecosystemRoutes from "./routes/ecosystem.js";
 import jobsRoutes from "./routes/jobs.js";
+import cynergyFormRoutes from "./routes/cynergyForm.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -69,6 +70,7 @@ app.use("/api/upload", uploadRoutes);
 app.use("/api/reference", referenceRoutes);
 app.use("/api/ecosystem", ecosystemRoutes);
 app.use("/api/jobs", jobsRoutes);
+app.use("/api/cynergy-form", cynergyFormRoutes);
 
 const frontendCandidates = [
   path.join(__dirname, "../frontend/dist"),

@@ -289,3 +289,34 @@ model AppSettings {
   pricing   Json
   updatedAt DateTime @updatedAt
 }
+
+/// Staging inbox for Cynergy web-form PO entries (owned by cynergyform app; Tracker imports from here).
+enum CynergySubmissionStatus {
+  PENDING
+  REJECTED
+  IMPORTED
+}
+
+model CynergyFormSubmission {
+  id               Int                     @id @default(autoincrement())
+  status           CynergySubmissionStatus @default(PENDING)
+  poNo             String
+  poDate           String?
+  stockingLocation String?
+  portOfDest       String?
+  notes            String?
+  submitterName    String?
+  submitterEmail   String?
+  submitterPhone   String?
+  lines            Json
+  rejectReason     String?
+  reviewedById     String?
+  reviewedAt       DateTime?
+  importedPoId     Int?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@index([status])
+  @@index([poNo])
+  @@index([createdAt])
+}

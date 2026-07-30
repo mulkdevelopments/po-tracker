@@ -308,6 +308,53 @@ export const api = {
     request<{ line: Record<string, unknown>; product: Record<string, unknown> }>(
       `/upload/product/${encodeURIComponent(partNo)}${companyParam()}`,
     ),
+
+  listCynergyForms: (status?: string) => {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return request<{ submissions: CynergyFormSubmission[]; pendingCount: number }>(`/cynergy-form${q}`);
+  },
+
+  importCynergyForm: (id: number) =>
+    request<{ po: PurchaseOrder; submission: CynergyFormSubmission }>(`/cynergy-form/${id}/import`, {
+      method: "POST",
+      body: "{}",
+    }),
+
+  rejectCynergyForm: (id: number, reason?: string) =>
+    request<{ submission: CynergyFormSubmission }>(`/cynergy-form/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason || null }),
+    }),
+};
+
+export type CynergyFormLine = {
+  lineNo?: number;
+  description: string;
+  partNo?: string | null;
+  color?: string | null;
+  size?: string | null;
+  sheets: number;
+  notes?: string | null;
+};
+
+export type CynergyFormSubmission = {
+  id: number;
+  status: "PENDING" | "REJECTED" | "IMPORTED";
+  poNo: string;
+  poDate: string | null;
+  stockingLocation: string | null;
+  portOfDest: string | null;
+  notes: string | null;
+  submitterName: string | null;
+  submitterEmail: string | null;
+  submitterPhone: string | null;
+  lines: CynergyFormLine[];
+  rejectReason: string | null;
+  reviewedById: string | null;
+  reviewedAt: string | null;
+  importedPoId: number | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export function canAccessPage(user: AuthUser, page: string): boolean {
@@ -315,11 +362,11 @@ export function canAccessPage(user: AuthUser, page: string): boolean {
   if (user.restrictedPages.includes(page)) return false;
   const roleDefaults: Record<string, string[]> = {
     MAINTAINER: ["users"],
-    MANAGER: ["upload", "pricing", "master", "users"],
-    FINANCE: ["upload", "pricing", "master", "users"],
-    LOGISTICS: ["upload", "pricing", "master", "users"],
-    SUPERVISOR: ["upload", "pricing", "master", "users"],
-    VIEWER: ["upload", "pricing", "master", "users"],
+    MANAGER: ["upload", "cynergy-forms", "pricing", "master", "users"],
+    FINANCE: ["upload", "cynergy-forms", "pricing", "master", "users"],
+    LOGISTICS: ["upload", "cynergy-forms", "pricing", "master", "users"],
+    SUPERVISOR: ["upload", "cynergy-forms", "pricing", "master", "users"],
+    VIEWER: ["upload", "cynergy-forms", "pricing", "master", "users"],
   };
   return !(roleDefaults[user.role] ?? []).includes(page);
 }

@@ -6,6 +6,7 @@ import DashboardPage from "./pages/DashboardPage";
 import OrdersPage from "./pages/OrdersPage";
 import ProductionPage from "./pages/ProductionPage";
 import UploadPage from "./pages/UploadPage";
+import CynergyFormsPage from "./pages/CynergyFormsPage";
 import ItemsPage from "./pages/ItemsPage";
 import PricingPage from "./pages/PricingPage";
 import MasterPage from "./pages/MasterPage";
@@ -76,6 +77,14 @@ export default function App() {
           element={
             <ProtectedRoute page="upload">
               <UploadPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="cynergy-forms"
+          element={
+            <ProtectedRoute page="cynergy-forms">
+              <CynergyFormsPage />
             </ProtectedRoute>
           }
         />
