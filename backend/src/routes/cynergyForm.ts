@@ -257,15 +257,15 @@ router.delete("/:id", requireAuth, requirePage("cynergy-forms"), requirePoEdit, 
   res.json({ ok: true, id });
 });
 
-/** Delete all form submissions (optional ?status=PENDING|REJECTED|IMPORTED). */
+/** Delete selected form submissions by id (does not delete imported POs). */
 router.delete("/", requireAuth, requirePage("cynergy-forms"), requirePoEdit, async (req, res) => {
-  const status = String(req.query.status ?? "").toUpperCase();
-  const where =
-    status === "PENDING" || status === "REJECTED" || status === "IMPORTED"
-      ? { status: status as "PENDING" | "REJECTED" | "IMPORTED" }
-      : {};
+  const raw = req.body?.ids;
+  const ids = Array.isArray(raw)
+    ? [...new Set(raw.map((v: unknown) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0))]
+    : [];
+  if (!ids.length) return res.status(400).json({ error: "Select at least one form to delete" });
 
-  const result = await prisma.cynergyFormSubmission.deleteMany({ where });
+  const result = await prisma.cynergyFormSubmission.deleteMany({ where: { id: { in: ids } } });
   res.json({ ok: true, deleted: result.count });
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, canEditPo, type CynergyFormSubmission } from "../api";
 import { useAuth } from "../AuthContext";
@@ -35,6 +35,8 @@ export default function CynergyFormsPage() {
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<CynergyFormSubmission | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -43,6 +45,7 @@ export default function CynergyFormsPage() {
       const data = await api.listCynergyForms(filter === "ALL" ? undefined : filter);
       setRows(data.submissions);
       setPendingCount(data.pendingCount);
+      setCheckedIds(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load submissions");
     } finally {
@@ -53,6 +56,33 @@ export default function CynergyFormsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const allVisibleSelected = useMemo(
+    () => rows.length > 0 && rows.every((r) => checkedIds.has(r.id)),
+    [rows, checkedIds],
+  );
+  const someVisibleSelected = useMemo(
+    () => rows.some((r) => checkedIds.has(r.id)) && !allVisibleSelected,
+    [rows, checkedIds, allVisibleSelected],
+  );
+  const selectedCount = checkedIds.size;
+
+  function toggleOne(id: number) {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    if (allVisibleSelected) {
+      setCheckedIds(new Set());
+      return;
+    }
+    setCheckedIds(new Set(rows.map((r) => r.id)));
+  }
 
   async function onImport(id: number) {
     if (!canImport) return;
@@ -112,37 +142,31 @@ export default function CynergyFormsPage() {
     }
   }
 
-  async function onDeleteAll() {
-    if (!canImport) return;
-    const scope =
-      filter === "ALL"
-        ? "ALL form submissions"
-        : filter === "IMPORTED"
-          ? "all Completed form submissions"
-          : `all ${filter.charAt(0) + filter.slice(1).toLowerCase()} form submissions`;
+  async function onDeleteSelected() {
+    if (!canImport || selectedCount === 0) return;
     if (
       !confirm(
-        `Delete ${scope}? This cannot be undone. Imported tracker POs are kept.`,
+        `Delete ${selectedCount} selected form submission${selectedCount === 1 ? "" : "s"}? Imported tracker POs are kept.`,
       )
     ) {
       return;
     }
-    if (!confirm("Type-confirm: permanently delete these form records?")) return;
-    setBusyId(-1);
+    setDeletingSelected(true);
     setError("");
     try {
-      const { deleted } = await api.deleteAllCynergyForms(filter === "ALL" ? undefined : filter);
+      const { deleted } = await api.deleteCynergyForms([...checkedIds]);
       await load();
       setSelected(null);
-      if (deleted === 0) setError("No submissions to delete in this view.");
+      if (deleted === 0) setError("No matching submissions to delete.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete all failed");
+      setError(e instanceof Error ? e.message : "Delete failed");
     } finally {
-      setBusyId(null);
+      setDeletingSelected(false);
     }
   }
 
   const lines = Array.isArray(selected?.lines) ? selected!.lines : [];
+  const colSpan = canImport ? 8 : 7;
 
   return (
     <div className="space-y-4">
@@ -158,11 +182,15 @@ export default function CynergyFormsPage() {
           {canImport && (
             <button
               type="button"
-              disabled={busyId !== null || loading || rows.length === 0}
-              onClick={() => void onDeleteAll()}
+              disabled={deletingSelected || busyId !== null || selectedCount === 0}
+              onClick={() => void onDeleteSelected()}
               className="rounded-md border border-rose-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
             >
-              {busyId === -1 ? "Deleting…" : filter === "ALL" ? "Delete all forms" : "Delete all in view"}
+              {deletingSelected
+                ? "Deleting…"
+                : selectedCount > 0
+                  ? `Delete selected (${selectedCount})`
+                  : "Delete selected"}
             </button>
           )}
           <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
@@ -195,6 +223,21 @@ export default function CynergyFormsPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
+                {canImport && (
+                  <th className="px-3 py-2 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someVisibleSelected;
+                      }}
+                      onChange={toggleAllVisible}
+                      disabled={loading || rows.length === 0}
+                      aria-label="Select all in view"
+                      className="rounded border-slate-300"
+                    />
+                  </th>
+                )}
                 <th className="px-3 py-2">#</th>
                 <th className="px-3 py-2">PO</th>
                 <th className="px-3 py-2">Date</th>
@@ -207,13 +250,13 @@ export default function CynergyFormsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
+                  <td colSpan={colSpan} className="px-3 py-8 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
+                  <td colSpan={colSpan} className="px-3 py-8 text-center text-slate-400">
                     No submissions in this view.
                   </td>
                 </tr>
@@ -226,6 +269,17 @@ export default function CynergyFormsPage() {
                       selected?.id === s.id ? "bg-indigo-50/60" : ""
                     }`}
                   >
+                    {canImport && (
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={checkedIds.has(s.id)}
+                          onChange={() => toggleOne(s.id)}
+                          aria-label={`Select form ${s.id}`}
+                          className="rounded border-slate-300"
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-2 text-slate-500">{s.id}</td>
                     <td className="px-3 py-2 font-medium text-slate-900">{s.poNo}</td>
                     <td className="px-3 py-2">{s.poDate || "—"}</td>
