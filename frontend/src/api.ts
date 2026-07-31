@@ -325,6 +325,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason: reason || null }),
     }),
+
+  deleteCynergyForm: (id: number) =>
+    request<{ ok: boolean; id: number }>(`/cynergy-form/${id}`, { method: "DELETE" }),
+
+  deleteAllCynergyForms: (status?: string) => {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return request<{ ok: boolean; deleted: number }>(`/cynergy-form${q}`, { method: "DELETE" });
+  },
 };
 
 export type CynergyFormLine = {

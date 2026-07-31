@@ -245,4 +245,28 @@ router.post("/:id/import", requireAuth, requirePage("cynergy-forms"), requirePoE
   res.json(result);
 });
 
+/** Delete one staging submission (does not delete an already-imported PO). */
+router.delete("/:id", requireAuth, requirePage("cynergy-forms"), requirePoEdit, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id" });
+
+  const existing = await prisma.cynergyFormSubmission.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: "Not found" });
+
+  await prisma.cynergyFormSubmission.delete({ where: { id } });
+  res.json({ ok: true, id });
+});
+
+/** Delete all form submissions (optional ?status=PENDING|REJECTED|IMPORTED). */
+router.delete("/", requireAuth, requirePage("cynergy-forms"), requirePoEdit, async (req, res) => {
+  const status = String(req.query.status ?? "").toUpperCase();
+  const where =
+    status === "PENDING" || status === "REJECTED" || status === "IMPORTED"
+      ? { status: status as "PENDING" | "REJECTED" | "IMPORTED" }
+      : {};
+
+  const result = await prisma.cynergyFormSubmission.deleteMany({ where });
+  res.json({ ok: true, deleted: result.count });
+});
+
 export default router;

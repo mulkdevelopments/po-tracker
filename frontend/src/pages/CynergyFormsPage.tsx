@@ -90,6 +90,58 @@ export default function CynergyFormsPage() {
     }
   }
 
+  async function onDelete(id: number) {
+    if (!canImport) return;
+    if (
+      !confirm(
+        "Delete this form submission? Imported tracker POs are not deleted — only the form record.",
+      )
+    ) {
+      return;
+    }
+    setBusyId(id);
+    setError("");
+    try {
+      await api.deleteCynergyForm(id);
+      await load();
+      setSelected(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onDeleteAll() {
+    if (!canImport) return;
+    const scope =
+      filter === "ALL"
+        ? "ALL form submissions"
+        : filter === "IMPORTED"
+          ? "all Completed form submissions"
+          : `all ${filter.charAt(0) + filter.slice(1).toLowerCase()} form submissions`;
+    if (
+      !confirm(
+        `Delete ${scope}? This cannot be undone. Imported tracker POs are kept.`,
+      )
+    ) {
+      return;
+    }
+    if (!confirm("Type-confirm: permanently delete these form records?")) return;
+    setBusyId(-1);
+    setError("");
+    try {
+      const { deleted } = await api.deleteAllCynergyForms(filter === "ALL" ? undefined : filter);
+      await load();
+      setSelected(null);
+      if (deleted === 0) setError("No submissions to delete in this view.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete all failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   const lines = Array.isArray(selected?.lines) ? selected!.lines : [];
 
   return (
@@ -102,19 +154,31 @@ export default function CynergyFormsPage() {
             {pendingCount > 0 ? ` ${pendingCount} pending.` : ""}
           </p>
         </div>
-        <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
-          {(["PENDING", "ALL", "IMPORTED", "REJECTED"] as Filter[]).map((f) => (
+        <div className="flex flex-wrap items-center gap-2">
+          {canImport && (
             <button
-              key={f}
               type="button"
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 text-sm rounded-md ${
-                filter === f ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-50"
-              }`}
+              disabled={busyId !== null || loading || rows.length === 0}
+              onClick={() => void onDeleteAll()}
+              className="rounded-md border border-rose-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
             >
-              {f === "ALL" ? "All" : f === "IMPORTED" ? "Completed" : f.charAt(0) + f.slice(1).toLowerCase()}
+              {busyId === -1 ? "Deleting…" : filter === "ALL" ? "Delete all forms" : "Delete all in view"}
             </button>
-          ))}
+          )}
+          <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
+            {(["PENDING", "ALL", "IMPORTED", "REJECTED"] as Filter[]).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1.5 text-sm rounded-md ${
+                  filter === f ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {f === "ALL" ? "All" : f === "IMPORTED" ? "Completed" : f.charAt(0) + f.slice(1).toLowerCase()}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -123,7 +187,7 @@ export default function CynergyFormsPage() {
       )}
 
       {!canImport && (
-        <div className="text-sm text-slate-500">Only Maintainers can import or reject submissions.</div>
+        <div className="text-sm text-slate-500">Only Maintainers can import, reject, or delete submissions.</div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
@@ -237,6 +301,16 @@ export default function CynergyFormsPage() {
                     Reject
                   </button>
                 </div>
+              )}
+              {canImport && (
+                <button
+                  type="button"
+                  disabled={busyId === selected.id}
+                  onClick={() => void onDelete(selected.id)}
+                  className="w-full rounded-md border border-rose-200 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  {busyId === selected.id ? "Deleting…" : "Delete form"}
+                </button>
               )}
             </>
           )}
