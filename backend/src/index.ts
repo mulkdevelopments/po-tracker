@@ -27,7 +27,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 // Also allows *.vercel.app and *.mulkinternational.co (see origin check below).
 const allowedOrigins = (
   process.env.FRONTEND_URL ||
-  "http://localhost:5174,http://localhost:5175,https://cynergyform.vercel.app"
+  "http://localhost:5174,http://localhost:5175,https://cynergy.mulkinternational.co"
 )
   .split(",")
   .map((s) => s.trim())

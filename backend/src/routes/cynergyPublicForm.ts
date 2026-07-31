@@ -4,7 +4,7 @@ import { prisma } from "../middleware/auth.js";
 
 /**
  * Public Cynergy form endpoints (no JWT).
- * Used by https://cynergyform.vercel.app — submit + submitter inbox only.
+ * Used by https://cynergy.mulkinternational.co — submit + submitter inbox only.
  * Import/reject stay on /api/cynergy-form (Tracker auth).
  */
 const REVIEW_KEY = process.env.CYNERGY_FORM_REVIEW_KEY || process.env.REVIEW_KEY || "cynergy-review-dev";
