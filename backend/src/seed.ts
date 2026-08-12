@@ -2,7 +2,7 @@ import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { DEFAULT_PI_DOCUMENT } from "./piDocumentDefaults.js";
-import { missingHeaderTotals } from "./lineMath.js";
+import { i, n, s, seedOrders, type Company, type OrderRecord } from "./seedOrders.js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -47,9 +47,6 @@ interface Reference {
   } | null;
 }
 
-type Company = "UFP" | "SYNERGY";
-
-type OrderRecord = Record<string, unknown> & { lines?: Record<string, unknown>[] };
 type ProductionRecord = {
   poNo: string;
   rev: number;
@@ -67,10 +64,6 @@ type ProductionRecord = {
 function readJson<T>(file: string): T {
   return JSON.parse(readFileSync(path.join(dataDir, file), "utf8")) as T;
 }
-
-const n = (v: unknown): number | null => (v == null || v === "" ? null : Number(v));
-const s = (v: unknown): string | null => (v == null ? null : String(v));
-const i = (v: unknown): number | null => (v == null || v === "" ? null : Math.round(Number(v)));
 
 async function seedAdmin() {
   const adminEmail = process.env.SUPER_ADMIN_EMAIL || "admin@ufp.local";
@@ -324,104 +317,6 @@ async function seedAppSettings(company: Company, ref: Reference) {
   console.log(`AppSettings (master + pricing) seeded for ${company}`);
 }
 
-async function seedOrders(company: Company, orders: OrderRecord[]) {
-  await prisma.purchaseOrder.deleteMany({ where: { company } });
-
-  let count = 0;
-  for (const o of orders) {
-    const lines = o.lines ?? [];
-    // The tracker sheet has no gross invoice column of its own: for UFP the PI value is
-    // that same m²-based figure, and Cynergy's sheet leaves it to the lines (request #1).
-    const totals = missingHeaderTotals(
-      {
-        poValue: n(o.poValue),
-        totalM2: n(o.totalM2),
-        skids: n(o.skids),
-        grossInvoiceValue: n(o.piValue),
-      },
-      lines.map((l) => ({ extPo: n(l.extPo), extInv: n(l.extInv), qtyM2: n(l.qtyM2), skids: n(l.skids) })),
-    );
-    await prisma.purchaseOrder.create({
-      data: {
-        company,
-        siNo: i(o.siNo),
-        poNo: String(o.poNo ?? ""),
-        rev: i(o.rev) ?? 0,
-        concat: s(o.concat),
-        status: String(o.status ?? "PO Received"),
-        poDate: s(o.poDate),
-        active: o.active !== false,
-        skids: n(o.skids) ?? totals.skids ?? null,
-        stockingLocation: s(o.stockingLocation),
-        portOfDest: s(o.portOfDest),
-        poValue: n(o.poValue) ?? totals.poValue ?? null,
-        grossInvoiceValue: n(o.piValue) ?? totals.grossInvoiceValue ?? null,
-        totalM2: n(o.totalM2) ?? totals.totalM2 ?? null,
-        piNo: s(o.piNo),
-        piDate: s(o.piDate),
-        poToPi: i(o.poToPi),
-        piValue: n(o.piValue),
-        dpDate: s(o.dpDate),
-        piToDp: i(o.piToDp),
-        dpAmount: n(o.dpAmount),
-        productionEtc: s(o.productionEtc),
-        shippingEta: s(o.shippingEta),
-        bol: s(o.bol),
-        isf: s(o.isf),
-        containerNo: s(o.containerNo),
-        shippingLine: s(o.shippingLine),
-        shippingUrl: s(o.shippingUrl),
-        actualDeparture: s(o.actualDeparture),
-        dpToShip: i(o.dpToShip),
-        ciNo: s(o.ciNo),
-        ciDate: s(o.ciDate),
-        revisionSent: s(o.revisionSent),
-        freight: n(o.freight),
-        inland: n(o.inland),
-        ciValue: n(o.ciValue),
-        balanceDue: n(o.balanceDue),
-        bpDate: s(o.bpDate),
-        ciToBp: i(o.ciToBp),
-        bpAmount: n(o.bpAmount),
-        telexDate: s(o.telexDate),
-        bpToTelex: i(o.bpToTelex),
-        arrivalDate: s(o.arrivalDate),
-        lines: {
-          create: lines.map((l, idx) => ({
-            lineNo: i(l.lineNo) ?? idx + 1,
-            partNo: s(l.partNo),
-            custPartNo: s(l.custPartNo),
-            size: s(l.size),
-            widthMm: n(l.widthMm),
-            lengthMm: n(l.lengthMm),
-            color: s(l.color),
-            qtyMsf: n(l.qtyMsf),
-            qtyM2: n(l.qtyM2),
-            sheets: n(l.sheets),
-            skids: n(l.skids),
-            unitMsf: n(l.unitMsf),
-            unitSheet: n(l.unitSheet),
-            unitM2: n(l.unitM2),
-            extPo: n(l.extPo),
-            extInv: n(l.extInv),
-            notes: s(l.notes),
-          })),
-        },
-        history: {
-          create: {
-            stage: String(o.status ?? "PO Received"),
-            note: "Imported from Order Tracker spreadsheet",
-            byRole: "seed",
-            at: s(o.poDate) || new Date().toISOString().slice(0, 10),
-          },
-        },
-      },
-    });
-    count++;
-  }
-  console.log(`Seeded ${count} purchase orders (${company})`);
-}
-
 async function seedProduction(rows: ProductionRecord[]) {
   let applied = 0;
   for (const p of rows) {
@@ -487,7 +382,7 @@ async function main() {
 
   const hasUfpOrders = (await prisma.purchaseOrder.count({ where: { company: "UFP" } })) > 0;
   if (force || !hasUfpOrders) {
-    await seedOrders("UFP", ufpOrders);
+    await seedOrders(prisma, "UFP", ufpOrders);
     await seedProduction(production);
   } else {
     console.log("UFP orders present — skipping order/production import (set SEED_FORCE=true to re-import)");
@@ -496,7 +391,7 @@ async function main() {
   const hasCynergyOrders =
     (await prisma.purchaseOrder.count({ where: { company: "SYNERGY" } })) > 0;
   if (force || !hasCynergyOrders) {
-    await seedOrders("SYNERGY", cynergyOrders);
+    await seedOrders(prisma, "SYNERGY", cynergyOrders);
   } else {
     console.log("Cynergy orders present — skipping (set SEED_FORCE=true to re-import)");
   }
