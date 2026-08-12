@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma, requireAuth, requirePage, requirePoEdit } from "../middleware/auth.js";
 import { pickPriceForDate, ratesFromProduct } from "../productPricing.js";
 import { matchSynergyProduct } from "../synergyDecode.js";
+import { CYNERGY_DEFAULT_PORT, CYNERGY_DEFAULT_STOCKING_LOCATION } from "../companies.js";
 
 type CatalogProduct = Prisma.ProductGetPayload<{ include: { prices: true } }>;
 
@@ -11,9 +12,17 @@ function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/**
+ * Cynergy's Order Details divides straight through (`= sheets / sheetsPerSkid`) rather
+ * than rounding up, so a part-filled skid shows as a fraction.
+ */
 function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number | null {
   if (sheets == null || sheetsPerSkid <= 0) return null;
-  return Math.ceil(sheets / sheetsPerSkid);
+  return Math.round((sheets / sheetsPerSkid) * 100) / 100;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function buildPoLine(
@@ -40,8 +49,9 @@ function buildPoLine(
       skids: skidsFromSheets(sheets, sheetsPerSkid),
       unitMsf: null,
       unitM2: null,
+      unitSheet: null,
       extPo: null,
-      leadTime: null,
+      extInv: null,
       notes: extras.notes || rawDescription,
       priceAsOf: null,
       priceEffectiveFrom: null,
@@ -50,18 +60,21 @@ function buildPoLine(
 
   const rates = pickPriceForDate(product.prices ?? [], asOf) ?? ratesFromProduct(product, asOf);
   const pricePerM2 = rates?.pricePerM2 ?? null;
-  const pricePerMsq = rates?.pricePerMsq ?? null;
   const pricePerSheet = rates?.pricePerSheet ?? null;
-  const leadTimeDays = rates?.leadTimeDays ?? null;
   const m2PerSheet =
     product.widthMm && product.lengthMm ? (product.widthMm * product.lengthMm) / 1_000_000 : null;
   const sqftPerSheet =
     product.widthIn && product.lengthIn ? (product.widthIn * product.lengthIn) / 144 : null;
   const qtyM2 = m2PerSheet != null ? sheets * m2PerSheet : null;
   const qtyMsf = sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
-  let extPo: number | null = null;
-  if (pricePerSheet != null) extPo = sheets * pricePerSheet;
-  else if (qtyM2 != null && pricePerM2 != null) extPo = qtyM2 * pricePerM2;
+
+  // Cynergy prices per sheet at 2 dp and carries a single extended value:
+  // Ext (Inv) = Qty (Sheets) × Unit (Sheet). Unlike UFP there is no separate
+  // sq-ft-based PO value, so PO value and invoice value are the same figure.
+  const unitSheet = pricePerSheet != null ? round2(pricePerSheet) : null;
+  let ext: number | null = null;
+  if (unitSheet != null) ext = sheets * unitSheet;
+  else if (qtyM2 != null && pricePerM2 != null) ext = qtyM2 * pricePerM2;
 
   const sizeLabel =
     extras.size ||
@@ -88,14 +101,37 @@ function buildPoLine(
     qtyM2,
     sheets,
     skids: skidsFromSheets(sheets, sheetsPerSkid),
-    unitMsf: pricePerMsq,
+    unitMsf: null,
     unitM2: pricePerM2,
-    extPo,
-    leadTime: leadTimeDays,
+    unitSheet,
+    extPo: ext,
+    extInv: ext,
     notes: extras.notes || null,
     priceAsOf: rates ? asOf : null,
     priceEffectiveFrom: rates?.effectiveFrom ?? null,
   };
+}
+
+const colorKey = (v: unknown) =>
+  String(v ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+
+/** Match a staged form line on the four values a Cynergy PO actually provides. */
+function matchByDimensionsAndColor(
+  row: Record<string, unknown>,
+  products: CatalogProduct[],
+): CatalogProduct | null {
+  const w = Number(row.widthIn);
+  const l = Number(row.lengthIn);
+  const color = colorKey(row.color);
+  if (!Number.isFinite(w) || !Number.isFinite(l) || !color) return null;
+  return (
+    products.find(
+      (p) =>
+        Number(p.widthIn) === w &&
+        Number(p.lengthIn) === l &&
+        [p.shortColorName, p.colorName, p.vendorColorCode].some((c) => colorKey(c) === color),
+    ) ?? null
+  );
 }
 
 const router = Router();
@@ -162,11 +198,14 @@ router.post("/:id/import", requireAuth, requirePage("cynergy-forms"), requirePoE
   if (!rawLines.length) return res.status(400).json({ error: "Submission has no lines" });
 
   const [products, config, siAgg] = await Promise.all([
-    prisma.product.findMany({ include: { prices: { orderBy: { effectiveFrom: "desc" } } } }),
-    prisma.appConfig.findUnique({ where: { id: 1 } }),
+    prisma.product.findMany({
+      where: { company: "SYNERGY" },
+      include: { prices: { orderBy: { effectiveFrom: "desc" } } },
+    }),
+    prisma.appConfig.findUnique({ where: { company: "SYNERGY" } }),
     prisma.purchaseOrder.aggregate({ where: { company: "SYNERGY" }, _max: { siNo: true } }),
   ]);
-  const sheetsPerSkid = config?.sheetsPerSkid ?? 50;
+  const sheetsPerSkid = config?.sheetsPerSkid ?? 200;
   const asOf = existing.poDate || todayISO();
   const byPart = new Map(products.map((p) => [p.partNo.toUpperCase(), p]));
 
@@ -176,6 +215,8 @@ router.post("/:id/import", requireAuth, requirePage("cynergy-forms"), requirePoE
     const partHint = row.partNo ? String(row.partNo).trim() : "";
     let product: CatalogProduct | null = partHint ? byPart.get(partHint.toUpperCase()) ?? null : null;
     if (!product) product = matchSynergyProduct(description, products) as CatalogProduct | null;
+    // Forms submitted after request #27 carry dimensions + colour instead of free text.
+    if (!product) product = matchByDimensionsAndColor(row, products);
     return buildPoLine(product, i + 1, Number.isFinite(sheets) ? sheets : 0, sheetsPerSkid, description, asOf, {
       partNo: partHint || null,
       color: row.color != null ? String(row.color) : null,
@@ -187,6 +228,7 @@ router.post("/:id/import", requireAuth, requirePage("cynergy-forms"), requirePoE
   const totalM2 = poLines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
   const skids = poLines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
   const catalogValue = poLines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const grossInvoiceValue = poLines.reduce((s, l) => s + (Number(l.extInv) || Number(l.extPo) || 0), 0);
   const siNo = (siAgg._max.siNo ?? 0) + 1;
   const noteParts = [
     existing.notes,
@@ -207,11 +249,11 @@ router.post("/:id/import", requireAuth, requirePage("cynergy-forms"), requirePoE
         poDate: existing.poDate || todayISO(),
         active: true,
         skids: skids || null,
-        stockingLocation: existing.stockingLocation,
-        portOfDest: existing.portOfDest,
+        stockingLocation: existing.stockingLocation || CYNERGY_DEFAULT_STOCKING_LOCATION,
+        portOfDest: existing.portOfDest || CYNERGY_DEFAULT_PORT,
         poValue: catalogValue || null,
         piValue: catalogValue || null,
-        grossInvoiceValue: catalogValue || null,
+        grossInvoiceValue: grossInvoiceValue || null,
         totalM2: totalM2 || null,
         priority: "Standard",
         notes: noteParts.join(" · ") || null,

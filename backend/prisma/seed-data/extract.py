@@ -2,7 +2,7 @@
 """Deterministic extractor: converts the source workbook into reviewable JSON
 seed files (reference.json + orders.json). Run from the workbook directory:
 
-    python3 backend/prisma/seed-data/extract.py "UFP Order Tracker (1).xlsx"
+    python3 backend/prisma/seed-data/extract.py "docs for llm reference /UFP Order Tracker (2).xlsx"
 
 The output JSON is committed and consumed by prisma/seed; the workbook itself
 is NOT needed at runtime. Re-run only when the source spreadsheet changes.
@@ -131,14 +131,17 @@ def main():
 
     # Product catalog (Pricing Table)
     pt = wb["Pricing Table - eff 27-Jan-2026"]
-    pricing_note = cell(pt.cell(1, 20).value)  # T1
+    # T1 holds the "price per m2 will increase by $0.20 … for Houston" note, which was
+    # dropped from the tracker (request log #18). Deliberately not imported.
+    pricing_note = None
     products = []
     colors = {}
     for r in range(3, pt.max_row + 1):
         code1 = pt.cell(r, 1).value
         if code1 is None:
             continue
-        if str(code1).strip().upper().startswith("NOTE"):
+        code1s = str(code1).strip()
+        if code1s.upper().startswith("NOTE") or len(code1s) > 32 or len(code1s.split()) > 4:
             break
         name = cell(pt.cell(r, 12).value)       # L Color
         vendor = cell(pt.cell(r, 13).value)     # M Vendor Color Code
@@ -160,7 +163,6 @@ def main():
             "pricePerM2": num(pt.cell(r, 15).value),
             "pricePerMsq": num(pt.cell(r, 16).value),
             "pricePerSheet": num(pt.cell(r, 17).value),
-            "leadTimeDays": as_int(pt.cell(r, 18).value),
         })
         if vendor and vendor not in colors:
             colors[vendor] = {
@@ -228,9 +230,9 @@ def main():
         8: "lineNo", 9: "partNo", 10: "custPartNo", 11: "size",
         12: "widthMm", 13: "lengthMm", 14: "color", 15: "qtyMsf",
         16: "qtyM2", 17: "sheets", 18: "skids", 19: "unitMsf",
-        20: "unitM2", 21: "extPo", 22: "extInv", 23: "leadTime", 24: "notes",
+        20: "unitM2", 21: "extPo", 22: "extInv", 24: "notes",
     }
-    L_INT = {"lineNo", "leadTime"}
+    L_INT = {"lineNo"}
     L_FLOAT = {"widthMm", "lengthMm", "qtyMsf", "qtyM2", "sheets", "skids",
                "unitMsf", "unitM2", "extPo", "extInv"}
     orphan_lines = 0

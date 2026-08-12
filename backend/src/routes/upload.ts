@@ -5,6 +5,7 @@ import type { Product, ProductPrice } from "@prisma/client";
 import { prisma, requireAuth, requirePage } from "../middleware/auth.js";
 import { parseCompany } from "../companies.js";
 import { pickPriceForDate, ratesFromProduct } from "../productPricing.js";
+import { sheetsFromMsf } from "../lineMath.js";
 import { guessSynergyPage, guessSynergyPages } from "../synergyDecode.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -40,6 +41,17 @@ function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number |
   return Math.ceil(sheets / sheetsPerSkid);
 }
 
+/** Sheet count from the PO's own quantity when it only prints MSF (request #24). */
+function sheetsFromPdfQty(
+  sheets: number | null,
+  qtyMsf: number | null | undefined,
+  sqftPerSheet: number | null,
+  sheetsPerSkid: number,
+): number | null {
+  if (sheets != null) return sheets;
+  return sheetsFromMsf(qtyMsf, sqftPerSheet, sheetsPerSkid);
+}
+
 // UFP POs often print "3 pkgs @ 200 pcs/pkg = 600 pcs" — avoid grabbing the per-pkg size.
 function parseLineQty(ctx: string, sheetsPerSkid: number): { sheets: number | null; skids: number | null } {
   const total = ctx.match(/=\s*(\d{2,5})\s*(?:PCS?|SHEETS?|EA|PIECES)\b/i);
@@ -66,7 +78,7 @@ function parseLineQty(ctx: string, sheetsPerSkid: number): { sheets: number | nu
 function lineFromProduct(
   p: ProductRow,
   lineNo: number,
-  sheets: number | null,
+  sheetsIn: number | null,
   sheetsPerSkid: number,
   asOf: string,
   skidsOverride?: number | null,
@@ -76,9 +88,10 @@ function lineFromProduct(
   const pricePerM2 = rates?.pricePerM2 ?? null;
   const pricePerMsq = rates?.pricePerMsq ?? null;
   const pricePerSheet = rates?.pricePerSheet ?? null;
-  const leadTimeDays = rates?.leadTimeDays ?? null;
   const m2PerSheet = p.widthMm && p.lengthMm ? (p.widthMm * p.lengthMm) / 1_000_000 : null;
   const sqftPerSheet = p.widthIn && p.lengthIn ? (p.widthIn * p.lengthIn) / 144 : null;
+  // A PO that only prints MSF still has to yield sheets, m² and both line values.
+  const sheets = sheetsFromPdfQty(sheetsIn, pdf?.qtyMsf, sqftPerSheet, sheetsPerSkid);
   const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
   const qtyMsf =
     pdf?.qtyMsf != null
@@ -90,8 +103,10 @@ function lineFromProduct(
   let catalogExt: number | null = null;
   if (sheets != null && pricePerSheet != null) catalogExt = sheets * pricePerSheet;
   else if (qtyM2 != null && pricePerM2 != null) catalogExt = qtyM2 * pricePerM2;
-  // PO line value — prefer PDF amount when present
+  // PO line value — prefer PDF amount (sq ft) when present
   const extPo = pdf?.amount != null ? pdf.amount : catalogExt;
+  // Gross invoice line — m² × $/m² (independent of PDF sq-ft amount)
+  const extInv = qtyM2 != null && pricePerM2 != null ? qtyM2 * pricePerM2 : catalogExt;
   const sizeLabel = [p.thickness, p.widthIn ? `${p.widthIn}"` : "", p.lengthIn ? `x ${p.lengthIn}"` : "", p.construction]
     .filter(Boolean)
     .join(" ");
@@ -107,11 +122,11 @@ function lineFromProduct(
     qtyM2,
     sheets,
     skids: skidsOverride ?? skidsFromSheets(sheets, sheetsPerSkid),
-    unitMsf: pricePerMsq,
+    unitMsf: pdf?.unitMsf ?? pricePerMsq,
     unitM2: pricePerM2,
     extPo,
+    extInv,
     catalogExt,
-    leadTime: leadTimeDays,
     priceAsOf: rates ? asOf : null,
     priceEffectiveFrom: rates?.effectiveFrom ?? null,
     matched: true,
@@ -165,6 +180,14 @@ function summarizeLines(lines: Record<string, unknown>[]) {
     return s + (Number(l.extPo) || 0);
   }, 0);
   const pdfLineSum = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const grossInvoiceValue = lines.reduce((s, l) => {
+    const inv = Number(l.extInv);
+    if (Number.isFinite(inv) && inv) return s + inv;
+    const qtyM2 = Number(l.qtyM2);
+    const unitM2 = Number(l.unitM2);
+    if (Number.isFinite(qtyM2) && Number.isFinite(unitM2)) return s + qtyM2 * unitM2;
+    return s;
+  }, 0);
   const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
   const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
   return {
@@ -172,6 +195,7 @@ function summarizeLines(lines: Record<string, unknown>[]) {
     piValue: catalogValue || null,
     /** Sum of line extPo (PDF amounts when present) */
     pdfLineSum: pdfLineSum || null,
+    grossInvoiceValue: grossInvoiceValue || null,
     totalM2: totalM2 || null,
     skids: skids || null,
   };
@@ -271,18 +295,18 @@ function guessFields(text: string, ref: Ref) {
   out.poValue = pdfTotal ?? sums.pdfLineSum;
   // PI value = catalog calculated rates
   out.piValue = sums.piValue;
+  out.grossInvoiceValue = sums.grossInvoiceValue;
   out.totalM2 = sums.totalM2;
   out.skids = sums.skids;
   return out;
 }
 
 async function loadRef(company: ReturnType<typeof parseCompany>): Promise<Ref> {
-  void company; // reference data is shared across companies
   const [products, colors, locations, config] = await Promise.all([
-    prisma.product.findMany({ include: { prices: true } }),
-    prisma.color.findMany(),
-    prisma.stockingLocation.findMany(),
-    prisma.appConfig.findUnique({ where: { id: 1 } }),
+    prisma.product.findMany({ where: { company }, include: { prices: true } }),
+    prisma.color.findMany({ where: { company } }),
+    prisma.stockingLocation.findMany({ where: { company } }),
+    prisma.appConfig.findUnique({ where: { company } }),
   ]);
   return {
     products,
@@ -336,12 +360,13 @@ router.post("/decode-synergy-pages", requireAuth, requirePage("upload"), async (
 
 // Look up a single catalog product by part number (for manual line entry autofill).
 router.get("/product/:partNo", requireAuth, requirePage("upload"), async (req, res) => {
+  const company = parseCompany(req.query.company);
   const product = await prisma.product.findUnique({
-    where: { partNo: String(req.params.partNo) },
+    where: { company_partNo: { company, partNo: String(req.params.partNo) } },
     include: { prices: true },
   });
   if (!product) return res.status(404).json({ error: "Not found" });
-  const config = await prisma.appConfig.findUnique({ where: { id: 1 } });
+  const config = await prisma.appConfig.findUnique({ where: { company } });
   const sheetsPerSkid = config?.sheetsPerSkid ?? 200;
   const asOf = String(req.query.asOf || new Date().toISOString().slice(0, 10)).slice(0, 10);
   res.json({ line: lineFromProduct(product, 1, null, sheetsPerSkid, asOf), product });

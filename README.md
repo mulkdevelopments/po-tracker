@@ -103,22 +103,31 @@ On Render, set `FRONTEND_URL` to your frontend URL(s), comma-separated (e.g. `ht
 
 Optional for Cynergy form submitter inbox: `CYNERGY_FORM_REVIEW_KEY` (must match form `VITE_REVIEW_KEY`).
 
+### Outbound email
+
+Proforma-Invoice distribution and Cynergy PO receipt confirmations send through Resend.
+Without these variables the app still works — sends are skipped and reported as not sent.
+
+| Variable | Purpose |
+|---|---|
+| `RESEND_API_KEY` | Resend API key |
+| `MAIL_FROM` | Verified sender, e.g. `Mulk PO Tracker <po@mulkinternational.co>` |
+| `MAIL_REPLY_TO` | Optional reply-to address |
+| `CYNERGY_FORM_NOTIFY_EMAILS` | Optional comma-separated internal BCC for form submissions |
+
+PI recipients are managed in the app under **Master Data → PI internal emails**.
+
 Local dev: leave `VITE_API_URL` unset; Vite proxies `/api` to the backend on port 4002.
 
 ## Project structure
 
 ```
-├── backend/          API, Prisma schema, auth, seed
+├── backend/          API, Prisma schema, auth, seed (`prisma/seed-data/`)
 ├── frontend/         React SPA
-├── seed-data.json    Sample POs from MVP
 ├── docker-compose.yml
 ├── Dockerfile        Production multi-stage build
 └── render.yaml       Render Blueprint
 ```
-
-## Sample documents
-
-Reference PO/PDF files in the repo root (`PurchaseOrderPrint.pdf`, `24092839.pdf`, Excel exports) were used to build the MVP seed data and PDF decoder patterns.
 
 ## Security notes
 

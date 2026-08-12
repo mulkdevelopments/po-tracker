@@ -19,6 +19,7 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
 
   const emails = parsePiInternalEmails(master.piInternalEmails);
   const sent = !!po.piSent?.trim();
+  const approved = !!po.piApprovedDate?.trim();
   const start = plannedProductionStart(po);
 
   const markSent = async () => {
@@ -29,6 +30,20 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
       onUpdated(updated);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Could not mark PI as sent");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendNow = async () => {
+    if (!emails.length) return;
+    if (!confirm(`Email the PI PDF to ${emails.join(", ")}?`)) return;
+    setBusy(true);
+    try {
+      const { po: updated } = await api.emailPi(po.id);
+      onUpdated(updated);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not send the PI email");
     } finally {
       setBusy(false);
     }
@@ -52,7 +67,9 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
           <div>
             <div className="text-sm font-semibold text-sky-950">Email PI — internal</div>
             <p className="text-xs text-sky-800 mt-0.5">
-              Download the PDF, open your mail client, attach the file, then mark as sent.
+              {approved
+                ? "Send the approved PI straight from the tracker, or download the PDF and mail it yourself."
+                : "The PI has to be approved before it can be emailed from the tracker."}
             </p>
           </div>
           <span
@@ -93,12 +110,22 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
           >
             Download PI PDF
           </button>
+          {emails.length > 0 && approved && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void sendNow()}
+              className="px-3 py-1.5 text-xs rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {sent ? "Resend PI email" : "Send PI email"}
+            </button>
+          )}
           {emails.length > 0 && (
             <a
               href={buildPiMailto(po, emails)}
               className="px-3 py-1.5 text-xs rounded-md border border-sky-400 bg-white text-sky-900 hover:bg-sky-100"
             >
-              Open email
+              Open in mail client
             </a>
           )}
           {!sent && (

@@ -2,6 +2,7 @@ import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { DEFAULT_PI_DOCUMENT } from "./piDocumentDefaults.js";
+import { missingHeaderTotals } from "./lineMath.js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -16,11 +17,18 @@ interface Reference {
   ports: { name: string; sailingDays: number | null; freight: number | null; inland: number | null }[];
   stockingLocations: { name: string; arrivalPort: string | null; email?: string | null }[];
   shippingLines: { name: string; trackingUrl: string | null }[];
-  colors: { code: string; name: string | null; isStandard: boolean }[];
+  colors: {
+    code: string;
+    name: string | null;
+    isStandard: boolean;
+    shortName?: string | null;
+    construction?: string | null;
+  }[];
   products: Record<string, unknown>[];
   config: {
     sheetsPerSkid: number | null;
     downpaymentPct: number | null;
+    finalPaymentDays?: number | null;
     containerMaxM2: number | null;
     leadTimeStandard: number | null;
     leadTimeNonStandard: number | null;
@@ -31,7 +39,15 @@ interface Reference {
     workingDaysPerMonth?: number | null;
   };
   pricingNote: string | null;
+  colorStockMatrix?: {
+    lengths: string[];
+    widths: string[];
+    doorPanels: { widthIn: number; lengthIn: number }[];
+    colors: { code: string | null; name: string | null; lengths: string[]; widths: string[] }[];
+  } | null;
 }
+
+type Company = "UFP" | "SYNERGY";
 
 type OrderRecord = Record<string, unknown> & { lines?: Record<string, unknown>[] };
 type ProductionRecord = {
@@ -75,28 +91,44 @@ async function seedAdmin() {
   console.log(`Super admin: ${adminEmail}`);
 }
 
-async function seedReference(ref: Reference) {
-  // Reference data is shared across all companies — replace wholesale for determinism.
-  await prisma.processStage.deleteMany();
-  await prisma.processStage.createMany({ data: ref.stages });
+async function seedReference(company: Company, ref: Reference) {
+  // Each company owns its own reference data — replace that company's rows wholesale
+  // for determinism, leaving the other company untouched.
+  const scope = { where: { company } };
 
-  await prisma.port.deleteMany();
-  await prisma.port.createMany({ data: ref.ports });
+  await prisma.processStage.deleteMany(scope);
+  await prisma.processStage.createMany({ data: ref.stages.map((x) => ({ company, ...x })) });
 
-  await prisma.stockingLocation.deleteMany();
-  await prisma.stockingLocation.createMany({ data: ref.stockingLocations });
+  await prisma.port.deleteMany(scope);
+  await prisma.port.createMany({ data: ref.ports.map((x) => ({ company, ...x })) });
 
-  await prisma.shippingLine.deleteMany();
-  await prisma.shippingLine.createMany({ data: ref.shippingLines });
+  await prisma.stockingLocation.deleteMany(scope);
+  await prisma.stockingLocation.createMany({
+    data: ref.stockingLocations.map((x) => ({ company, ...x })),
+  });
 
-  await prisma.color.deleteMany();
-  await prisma.color.createMany({ data: ref.colors });
+  await prisma.shippingLine.deleteMany(scope);
+  await prisma.shippingLine.createMany({ data: ref.shippingLines.map((x) => ({ company, ...x })) });
 
-  await prisma.product.deleteMany();
+  await prisma.color.deleteMany(scope);
+  await prisma.color.createMany({
+    data: ref.colors.map((c) => ({
+      company,
+      code: c.code,
+      name: c.name,
+      shortName: c.shortName ?? null,
+      construction: c.construction ?? null,
+      isStandard: c.isStandard,
+    })),
+  });
+
+  await prisma.product.deleteMany(scope);
   await prisma.product.createMany({
     data: ref.products.map((p) => ({
+      company,
       partNo: String(p.partNo),
       custPartNo: s(p.custPartNo),
+      vendorPartNo: s(p.vendorPartNo),
       itemType: s(p.itemType),
       surface: s(p.surface),
       construction: s(p.construction),
@@ -108,13 +140,26 @@ async function seedReference(ref: Reference) {
       description: s(p.description),
       colorName: s(p.colorName),
       vendorColorCode: s(p.vendorColorCode),
+      shortColorName: s(p.shortColorName),
       pricePerSqft: n(p.pricePerSqft),
       pricePerM2: n(p.pricePerM2),
       pricePerMsq: n(p.pricePerMsq),
       pricePerSheet: n(p.pricePerSheet),
-      leadTimeDays: i(p.leadTimeDays),
     })),
   });
+
+  // Baseline LIVE price list so Previous/history work without a first Excel upload.
+  // UFP's LIVE/PAST lists come from Excel uploads; only Cynergy needs a seed baseline.
+  if (company === "SYNERGY") {
+    await prisma.priceListVersion.deleteMany(scope);
+    await seedLivePriceList(
+      company,
+      "Price Sheet (seed)",
+      "Price Sheet",
+      "Cynergy Order Tracker.xlsx",
+      "2025-01-01",
+    );
+  }
 
   const capacityDefaults = {
     productionLines: ref.config.productionLines ?? 2,
@@ -123,21 +168,67 @@ async function seedReference(ref: Reference) {
     workingDaysPerMonth: ref.config.workingDaysPerMonth ?? 26,
   };
   await prisma.appConfig.upsert({
-    where: { id: 1 },
+    where: { company },
     update: { ...ref.config, pricingNote: ref.pricingNote },
-    create: { id: 1, ...ref.config, pricingNote: ref.pricingNote, ...capacityDefaults },
+    create: { company, ...ref.config, pricingNote: ref.pricingNote, ...capacityDefaults },
   });
 
   console.log(
-    `Reference: ${ref.stages.length} stages, ${ref.ports.length} ports, ` +
+    `Reference (${company}): ${ref.stages.length} stages, ${ref.ports.length} ports, ` +
       `${ref.stockingLocations.length} locations, ${ref.shippingLines.length} shipping lines, ` +
       `${ref.colors.length} colors, ${ref.products.length} products`,
   );
 }
 
+/** Open a LIVE PriceListVersion + ProductPrice row for every product of a company. */
+async function seedLivePriceList(company: Company, label: string, sourceSheet: string, sourceFile: string, effectiveFrom: string) {
+  const existingLive = await prisma.priceListVersion.count({
+    where: { company, status: "LIVE" },
+  });
+  if (existingLive > 0) return;
+
+  const products = await prisma.product.findMany({
+    where: { company },
+    select: {
+      id: true,
+      pricePerSqft: true,
+      pricePerM2: true,
+      pricePerMsq: true,
+      pricePerSheet: true,
+    },
+  });
+  if (!products.length) return;
+
+  const version = await prisma.priceListVersion.create({
+    data: {
+      company,
+      label,
+      effectiveFrom,
+      effectiveTo: null,
+      status: "LIVE",
+      sourceSheet,
+      sourceFile,
+      note: "Seeded from Order Tracker workbook",
+    },
+  });
+  await prisma.productPrice.createMany({
+    data: products.map((p) => ({
+      productId: p.id,
+      priceListVersionId: version.id,
+      pricePerSqft: p.pricePerSqft,
+      pricePerM2: p.pricePerM2,
+      pricePerMsq: p.pricePerMsq,
+      pricePerSheet: p.pricePerSheet,
+      effectiveFrom,
+      effectiveTo: null,
+    })),
+  });
+  console.log(`LIVE price list seeded for ${company}: ${products.length} prices`);
+}
+
 // Build the legacy AppSettings master/pricing JSON from reference data so the
-// existing Master/Pricing pages keep working. Shared identically across companies.
-function buildAppSettings(ref: Reference) {
+// existing Master/Pricing pages keep working. Built per company.
+function buildAppSettings(company: Company, ref: Reference) {
   const portsOfEntry: Record<string, string> = {};
   for (const l of ref.stockingLocations) if (l.arrivalPort) portsOfEntry[l.name] = l.arrivalPort;
   const sailingDays: Record<string, number> = {};
@@ -145,84 +236,114 @@ function buildAppSettings(ref: Reference) {
   const standardColors: Record<string, string> = {};
   for (const c of ref.colors) standardColors[c.code] = c.name ?? "";
 
+  // Requests #17 and #22: the OTC process-stage list and the flat freight / inland
+  // rates are gone from Master Data — stages come from the workflow definition and
+  // freight is entered per order at Commercial Invoice.
   const master = {
-    stages: ref.stages.map((x) => x.name),
     stockingLocations: ref.stockingLocations.map((x) => x.name),
     uaeSites: ["UAE - Hamriya", "UAE - Jerf"],
     defaultProductionSite: "UAE - Hamriya",
     productionEtcWeeks: 12,
     portsOfEntry,
     sailingDays,
-    freight: ref.ports[0]?.freight ?? null,
-    inland: ref.ports[0]?.inland ?? null,
     sheetsPerSkid: ref.config.sheetsPerSkid,
     containerMaxM2: ref.config.containerMaxM2,
     downpaymentPct: ref.config.downpaymentPct ?? 0.5,
+    finalPaymentDays: ref.config.finalPaymentDays ?? null,
     leadDays: {
       standard: ref.config.leadTimeStandard,
       nonStandard: ref.config.leadTimeNonStandard,
     },
     standardColors,
     piDocument: DEFAULT_PI_DOCUMENT,
+    colorStockMatrix: ref.colorStockMatrix ?? null,
   };
 
-  const pricingHeaders = [
-    "Product Code 1", "Product Code 2", "Item Type", "Surface", "Construction",
-    "Thickness", "Width (in)", "Width (mm)", "Length (in)", "Length (mm)",
-    "Description", "Color", "Vendor Color Code", "Price/sqft", "Price/m²",
-    "Price/MSQ", "Price/Sheet", "Lead Time (days)",
-  ];
-  const pricingRows = ref.products.map((p) => [
-    p.partNo, p.custPartNo, p.itemType, p.surface, p.construction, p.thickness,
-    p.widthIn, p.widthMm, p.lengthIn, p.lengthMm, p.description, p.colorName,
-    p.vendorColorCode, p.pricePerSqft, p.pricePerM2, p.pricePerMsq,
-    p.pricePerSheet, p.leadTimeDays,
-  ]);
+  // Column order mirrors each company's own price sheet.
+  const pricing =
+    company === "SYNERGY"
+      ? {
+          headers: [
+            "Full Item Description", "Product Code 1", "Product Code 2", "Item Type",
+            "Surface", "Thickness", "Width (in)", "Width (mm)", "Length (in)",
+            "Length (mm)", "Construction", "Color", "Vendor Color Code",
+            "Cynergy Color", "Price/sqft", "Price/m²", "Price/MSQ", "Price/Sheet",
+          ],
+          rows: ref.products.map((p) => [
+            p.partNo, p.vendorPartNo, p.custPartNo, p.itemType, p.surface, p.thickness,
+            p.widthIn, p.widthMm, p.lengthIn, p.lengthMm, p.construction, p.colorName,
+            p.vendorColorCode, p.shortColorName, p.pricePerSqft, p.pricePerM2,
+            p.pricePerMsq, p.pricePerSheet,
+          ]),
+        }
+      : {
+          headers: [
+            "Product Code 1", "Product Code 2", "Item Type", "Surface", "Construction",
+            "Thickness", "Width (in)", "Width (mm)", "Length (in)", "Length (mm)",
+            "Description", "Color", "Vendor Color Code", "Price/sqft", "Price/m²",
+            "Price/MSQ", "Price/Sheet",
+          ],
+          rows: ref.products.map((p) => [
+            p.partNo, p.custPartNo, p.itemType, p.surface, p.construction, p.thickness,
+            p.widthIn, p.widthMm, p.lengthIn, p.lengthMm, p.description, p.colorName,
+            p.vendorColorCode, p.pricePerSqft, p.pricePerM2, p.pricePerMsq,
+            p.pricePerSheet,
+          ]),
+        };
 
-  return { master, pricing: { headers: pricingHeaders, rows: pricingRows } };
+  return { master, pricing };
 }
 
-async function seedAppSettings(ref: Reference) {
-  const { master, pricing } = buildAppSettings(ref);
-  for (const company of ["UFP", "SYNERGY"] as const) {
-    const existing = await prisma.appSettings.findUnique({ where: { company } });
-    const existingMaster =
-      existing?.master && typeof existing.master === "object"
-        ? (existing.master as Record<string, unknown>)
-        : {};
-    const mergedMaster = {
-      ...master,
-      piDocument: existingMaster.piDocument ?? DEFAULT_PI_DOCUMENT,
-      uaeSites: existingMaster.uaeSites ?? master.uaeSites,
-      defaultProductionSite: existingMaster.defaultProductionSite ?? master.defaultProductionSite,
-      productionEtcWeeks: existingMaster.productionEtcWeeks ?? master.productionEtcWeeks,
-    };
-    await prisma.appSettings.upsert({
-      where: { company },
-      update: {
-        master: mergedMaster as Prisma.InputJsonValue,
-        pricing: pricing as Prisma.InputJsonValue,
-      },
-      create: {
-        company,
-        master: mergedMaster as Prisma.InputJsonValue,
-        pricing: pricing as Prisma.InputJsonValue,
-      },
-    });
-  }
-  console.log("AppSettings (master + pricing) seeded for UFP and SYNERGY");
+async function seedAppSettings(company: Company, ref: Reference) {
+  const { master, pricing } = buildAppSettings(company, ref);
+  const existing = await prisma.appSettings.findUnique({ where: { company } });
+  const existingMaster =
+    existing?.master && typeof existing.master === "object"
+      ? (existing.master as Record<string, unknown>)
+      : {};
+  const mergedMaster = {
+    ...master,
+    piDocument: existingMaster.piDocument ?? DEFAULT_PI_DOCUMENT,
+    uaeSites: existingMaster.uaeSites ?? master.uaeSites,
+    defaultProductionSite: existingMaster.defaultProductionSite ?? master.defaultProductionSite,
+    productionEtcWeeks: existingMaster.productionEtcWeeks ?? master.productionEtcWeeks,
+    colorStockMatrix: master.colorStockMatrix ?? existingMaster.colorStockMatrix ?? null,
+  };
+  await prisma.appSettings.upsert({
+    where: { company },
+    update: {
+      master: mergedMaster as Prisma.InputJsonValue,
+      pricing: pricing as Prisma.InputJsonValue,
+    },
+    create: {
+      company,
+      master: mergedMaster as Prisma.InputJsonValue,
+      pricing: pricing as Prisma.InputJsonValue,
+    },
+  });
+  console.log(`AppSettings (master + pricing) seeded for ${company}`);
 }
 
-async function seedOrders(orders: OrderRecord[]) {
-  // All current spreadsheet orders belong to UFP. Replace UFP orders for an exact copy.
-  await prisma.purchaseOrder.deleteMany({ where: { company: "UFP" } });
+async function seedOrders(company: Company, orders: OrderRecord[]) {
+  await prisma.purchaseOrder.deleteMany({ where: { company } });
 
   let count = 0;
   for (const o of orders) {
     const lines = o.lines ?? [];
+    // The tracker sheet has no gross invoice column of its own: for UFP the PI value is
+    // that same m²-based figure, and Cynergy's sheet leaves it to the lines (request #1).
+    const totals = missingHeaderTotals(
+      {
+        poValue: n(o.poValue),
+        totalM2: n(o.totalM2),
+        skids: n(o.skids),
+        grossInvoiceValue: n(o.piValue),
+      },
+      lines.map((l) => ({ extPo: n(l.extPo), extInv: n(l.extInv), qtyM2: n(l.qtyM2), skids: n(l.skids) })),
+    );
     await prisma.purchaseOrder.create({
       data: {
-        company: "UFP",
+        company,
         siNo: i(o.siNo),
         poNo: String(o.poNo ?? ""),
         rev: i(o.rev) ?? 0,
@@ -230,11 +351,12 @@ async function seedOrders(orders: OrderRecord[]) {
         status: String(o.status ?? "PO Received"),
         poDate: s(o.poDate),
         active: o.active !== false,
-        skids: n(o.skids),
+        skids: n(o.skids) ?? totals.skids ?? null,
         stockingLocation: s(o.stockingLocation),
         portOfDest: s(o.portOfDest),
-        poValue: n(o.poValue),
-        totalM2: n(o.totalM2),
+        poValue: n(o.poValue) ?? totals.poValue ?? null,
+        grossInvoiceValue: n(o.piValue) ?? totals.grossInvoiceValue ?? null,
+        totalM2: n(o.totalM2) ?? totals.totalM2 ?? null,
         piNo: s(o.piNo),
         piDate: s(o.piDate),
         poToPi: i(o.poToPi),
@@ -278,10 +400,10 @@ async function seedOrders(orders: OrderRecord[]) {
             sheets: n(l.sheets),
             skids: n(l.skids),
             unitMsf: n(l.unitMsf),
+            unitSheet: n(l.unitSheet),
             unitM2: n(l.unitM2),
             extPo: n(l.extPo),
             extInv: n(l.extInv),
-            leadTime: i(l.leadTime),
             notes: s(l.notes),
           })),
         },
@@ -297,7 +419,7 @@ async function seedOrders(orders: OrderRecord[]) {
     });
     count++;
   }
-  console.log(`Seeded ${count} purchase orders (UFP)`);
+  console.log(`Seeded ${count} purchase orders (${company})`);
 }
 
 async function seedProduction(rows: ProductionRecord[]) {
@@ -328,8 +450,10 @@ async function seedProduction(rows: ProductionRecord[]) {
 }
 
 async function main() {
-  const ref = readJson<Reference>("reference.json");
-  const orders = readJson<OrderRecord[]>("orders.json");
+  const ufpRef = readJson<Reference>("reference.json");
+  const cynergyRef = readJson<Reference>("cynergy-reference.json");
+  const ufpOrders = readJson<OrderRecord[]>("orders.json");
+  const cynergyOrders = readJson<OrderRecord[]>("cynergy-orders.json");
   const production = readJson<ProductionRecord[]>("production.json");
 
   // SEED_FORCE=true re-imports everything (destructive). Otherwise the
@@ -339,18 +463,42 @@ async function main() {
 
   await seedAdmin();
 
-  const hasReference = (await prisma.product.count()) > 0;
-  if (force || !hasReference) await seedReference(ref);
-  else console.log("Reference data present — skipping (set SEED_FORCE=true to re-import)");
+  // Each company's catalogue is checked independently so adding Cynergy does not
+  // require re-importing (and thus re-dating) UFP's prices.
+  for (const [company, ref] of [
+    ["UFP", ufpRef],
+    ["SYNERGY", cynergyRef],
+  ] as const) {
+    const hasReference = (await prisma.product.count({ where: { company } })) > 0;
+    if (force || !hasReference) await seedReference(company, ref);
+    else console.log(`Reference data present for ${company} — skipping (set SEED_FORCE=true to re-import)`);
+    await seedAppSettings(company, ref);
+  }
 
-  await seedAppSettings(ref);
+  // Cynergy may already have products from an earlier seed that did not create a
+  // LIVE price list — backfill that without wiping the rest of the catalogue.
+  await seedLivePriceList(
+    "SYNERGY",
+    "Price Sheet (seed)",
+    "Price Sheet",
+    "Cynergy Order Tracker.xlsx",
+    "2025-01-01",
+  );
 
-  const hasOrders = (await prisma.purchaseOrder.count({ where: { company: "UFP" } })) > 0;
-  if (force || !hasOrders) {
-    await seedOrders(orders);
+  const hasUfpOrders = (await prisma.purchaseOrder.count({ where: { company: "UFP" } })) > 0;
+  if (force || !hasUfpOrders) {
+    await seedOrders("UFP", ufpOrders);
     await seedProduction(production);
   } else {
-    console.log("Orders present — skipping order/production import (set SEED_FORCE=true to re-import)");
+    console.log("UFP orders present — skipping order/production import (set SEED_FORCE=true to re-import)");
+  }
+
+  const hasCynergyOrders =
+    (await prisma.purchaseOrder.count({ where: { company: "SYNERGY" } })) > 0;
+  if (force || !hasCynergyOrders) {
+    await seedOrders("SYNERGY", cynergyOrders);
+  } else {
+    console.log("Cynergy orders present — skipping (set SEED_FORCE=true to re-import)");
   }
 
   console.log("Seed complete");

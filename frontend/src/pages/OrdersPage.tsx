@@ -30,7 +30,12 @@ import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, MasterData } from "../types";
 import { fmtMoney, fmtNum, fmtDate } from "../utils";
 import { ListFilter, X } from "lucide-react";
-import { balancePaymentFlag, downpaymentFlag, resolveGrossInvoiceValue } from "../paymentFlags";
+import {
+  balancePaymentFlag,
+  downpaymentFlag,
+  paymentTolerance,
+  resolveGrossInvoiceValue,
+} from "../paymentFlags";
 
 type ColType = "text" | "int" | "num" | "money" | "date" | "status" | "bool" | "url";
 
@@ -46,7 +51,6 @@ const COLUMNS: Col[] = [
   { key: "siNo", label: "SI No.", type: "int", group: "PO Received" },
   { key: "poNo", label: "PO #", type: "text", group: "PO Received" },
   { key: "rev", label: "Rev #", type: "int", group: "PO Received" },
-  { key: "concat", label: "Concat", type: "text", group: "PO Received" },
   { key: "status", label: "Order Status", type: "status", group: "PO Received" },
   { key: "poDate", label: "Date Ordered (PO Date)", type: "date", group: "PO Received" },
   { key: "active", label: "Active", type: "bool", group: "PO Received" },
@@ -59,18 +63,15 @@ const COLUMNS: Col[] = [
   { key: "totalM2", label: "Total M2", type: "num", group: "PO Received" },
   { key: "piNo", label: "PI #", type: "text", group: "PI Generated" },
   { key: "piDate", label: "PI Date", type: "date", group: "PI Generated" },
-  { key: "poToPi", label: "PO to PI", type: "int", group: "PI Generated" },
   { key: "piValue", label: "PI Value (Gross)", type: "money", group: "PI Generated" },
   { key: "piApprovedDate", label: "PI Approved Date", type: "date", group: "PI Approved" },
   { key: "dpDate", label: "Downpayment Date", type: "date", group: "Downpayment / In Production" },
-  { key: "piToDp", label: "PI to DP", type: "int", group: "Downpayment / In Production" },
   { key: "dpAmount", label: "Downpayment Amount Received", type: "money", group: "Downpayment / In Production" },
   { key: "productionEtc", label: "Production ETC (in Container)", type: "date", group: "Downpayment / In Production" },
   { key: "shippingEta", label: "Shipping ETA", type: "date", group: "Downpayment / In Production" },
   { key: "isf", label: "ISF", type: "text", group: "Container Loaded" },
   { key: "containerNo", label: "Container #", type: "text", group: "Container Loaded" },
   { key: "actualDeparture", label: "Actual Shipping Departure", type: "date", group: "Container Loaded" },
-  { key: "dpToShip", label: "DP to Ship", type: "int", group: "Container Loaded" },
   { key: "ciNo", label: "Commercial Invoice #", type: "text", group: "CI sent" },
   { key: "ciDate", label: "Commercial Invoice Date", type: "date", group: "CI sent" },
   { key: "revisionSent", label: "Revision Sent?", type: "text", group: "CI sent" },
@@ -83,10 +84,8 @@ const COLUMNS: Col[] = [
   { key: "shippingLine", label: "Shipping Line", type: "text", group: "BL" },
   { key: "shippingUrl", label: "Tracking URL", type: "url", group: "BL" },
   { key: "bpDate", label: "Balance Payment Date", type: "date", group: "Balance Payment Received" },
-  { key: "ciToBp", label: "CI to BP", type: "int", group: "Balance Payment Received" },
   { key: "bpAmount", label: "Balance Amount Received", type: "money", group: "Balance Payment Received" },
   { key: "telexDate", label: "Telex / Seaway Release Date", type: "date", group: "Telex / Seaway Released" },
-  { key: "bpToTelex", label: "Balance Payment to Telex", type: "int", group: "Telex / Seaway Released" },
   { key: "arrivalDate", label: "Actual Arrival at Port", type: "date", group: "Shipping Complete" },
 ];
 
@@ -391,7 +390,7 @@ export default function OrdersPage() {
     if (col.key === "poNo") return <span className="font-mono font-semibold text-slate-900">{disp}</span>;
 
     if (col.key === "dpAmount") {
-      const flag = downpaymentFlag(p, master.downpaymentPct ?? 0.5);
+      const flag = downpaymentFlag(p, master.downpaymentPct ?? 0.5, paymentTolerance(master));
       return (
         <span className="inline-flex items-center gap-1.5 flex-wrap justify-end">
           <span>{disp || <span className="text-slate-300">—</span>}</span>
@@ -407,7 +406,7 @@ export default function OrdersPage() {
       );
     }
     if (col.key === "bpAmount") {
-      const flag = balancePaymentFlag(p);
+      const flag = balancePaymentFlag(p, paymentTolerance(master));
       return (
         <span className="inline-flex items-center gap-1.5 flex-wrap justify-end">
           <span>{disp || <span className="text-slate-300">—</span>}</span>
@@ -513,7 +512,7 @@ export default function OrdersPage() {
                   : "border-violet-300 text-violet-800 hover:bg-violet-50"
               }`}
             >
-              Pending client emails ({pendingStockingEmailCount})
+              Stocking emails pending ({pendingStockingEmailCount})
             </button>
           )}
           {showPiDueQueue && pendingPiDueCount > 0 && (

@@ -18,7 +18,6 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "siNo", label: "SI No.", type: "number" },
       { k: "poNo", label: "PO #" },
       { k: "rev", label: "Rev #", type: "number" },
-      { k: "concat", label: "Concat" },
       { k: "status", label: "Order Status", type: "select", options: flatStageIds("UFP") },
       { k: "poDate", label: "Date Ordered (PO Date)", type: "date" },
       { k: "active", label: "Active", type: "bool" },
@@ -45,7 +44,6 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     fields: [
       { k: "piNo", label: "PI #" },
       { k: "piDate", label: "PI Date", type: "date" },
-      { k: "poToPi", label: "PO to PI", type: "number" },
       { k: "piValue", label: "PI Value $ (calculated)", type: "number" },
     ],
   },
@@ -61,7 +59,6 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     title: "Downpayment / In Production",
     fields: [
       { k: "dpDate", label: "Downpayment Date", type: "date" },
-      { k: "piToDp", label: "PI to DP", type: "number" },
       { k: "dpAmount", label: "Downpayment Amount Received", type: "number" },
       { k: "productionStart", label: "Production Start", type: "date" },
       { k: "productionEtc", label: "Production ETC (in Container)", type: "date" },
@@ -82,7 +79,6 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "actualDeparture", label: "ETD", type: "date" },
       { k: "shippingEta", label: "ETA", type: "date" },
       { k: "isf", label: "ISF" },
-      { k: "dpToShip", label: "DP to Ship", type: "number" },
     ],
   },
   {
@@ -113,7 +109,6 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     title: "Balance Payment",
     fields: [
       { k: "bpDate", label: "Balance Payment Date", type: "date" },
-      { k: "ciToBp", label: "CI to BP", type: "number" },
       { k: "bpAmount", label: "Balance Amount Received", type: "number" },
     ],
   },
@@ -121,7 +116,6 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     title: "Telex / Seaway · Arrival",
     fields: [
       { k: "telexDate", label: "Telex / Seaway Release Date", type: "date" },
-      { k: "bpToTelex", label: "Balance Payment to Telex", type: "number" },
       { k: "arrivalDate", label: "Actual Arrival at Port", type: "date" },
     ],
   },
@@ -161,11 +155,15 @@ export const LINE_COLS: LineCol[] = [
   { k: "sheets", label: "Sheets" },
   { k: "skids", label: "Skids" },
   { k: "unitMsf", label: "Unit (MSF)" },
+  { k: "unitSheet", label: "Unit (Sheet)" },
   { k: "unitM2", label: "Unit (M2)" },
   { k: "extPo", label: "Ext (PO)" },
   { k: "extInv", label: "Ext (Inv)" },
-  { k: "priceAsOf", label: "Price as of", w: "w-28" },
-  { k: "priceEffectiveFrom", label: "Price from", w: "w-28" },
-  { k: "leadTime", label: "Lead Time" },
   { k: "notes", label: "Notes" },
 ];
+
+/** UFP orders quote per MSF, Cynergy per sheet — only show the rate that applies. */
+export function lineColsFor(company: string): LineCol[] {
+  const drop = company === "SYNERGY" ? "unitMsf" : "unitSheet";
+  return LINE_COLS.filter((c) => c.k !== drop);
+}

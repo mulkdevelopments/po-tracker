@@ -20,7 +20,14 @@ import { parseCompany } from "../companies.js";
 import { nextCiNo, nextPiNo } from "../docNumbers.js";
 import { generatePiPdf } from "../piPdf.js";
 import { generateCiExcel } from "../ciExcel.js";
-import { recalculateProductionDates, type CapacityConfig } from "../productionSchedule.js";
+import { completeLineMath, fillHeaderTotals, missingHeaderTotals } from "../lineMath.js";
+import { escapeHtml, isEmailConfigured, parseEmailList, sendMail } from "../email.js";
+import {
+  DEFAULT_LEAD_TIMES,
+  derivedPlanningDate,
+  recalculateProductionDates,
+  type CapacityConfig,
+} from "../productionSchedule.js";
 
 const router = Router();
 
@@ -106,9 +113,9 @@ const lineSchema = z.object({
   skids: numField,
   unitMsf: numField,
   unitM2: numField,
+  unitSheet: numField,
   extPo: numField,
   extInv: numField,
-  leadTime: intField,
   notes: strField,
   priceAsOf: strField,
   priceEffectiveFrom: strField,
@@ -198,12 +205,23 @@ function poCreateData(
   poData: Record<string, unknown>,
   company: ReturnType<typeof parseCompany>,
   lines: z.infer<typeof lineSchema>[],
+  sheetsPerSkid = 200,
 ): Prisma.PurchaseOrderCreateInput {
+  const completed = lines.map((l) => completeLineMath(l, sheetsPerSkid));
   return {
-    ...(poData as Prisma.PurchaseOrderUncheckedCreateInput),
+    ...(fillHeaderTotals(poData, completed) as Prisma.PurchaseOrderUncheckedCreateInput),
     company,
-    lines: { create: lines },
+    lines: { create: completed },
   };
+}
+
+/** Sheets per skid drives the MSF → sheet snapping (request #24). */
+async function sheetsPerSkidFor(company: ReturnType<typeof parseCompany>): Promise<number> {
+  const config = await prisma.appConfig.findUnique({
+    where: { company },
+    select: { sheetsPerSkid: true },
+  });
+  return config?.sheetsPerSkid ?? 200;
 }
 
 function poUpdateData(poData: Record<string, unknown>): Prisma.PurchaseOrderUpdateInput {
@@ -294,8 +312,8 @@ router.post("/recalculate-production", requireAuth, requirePage("production"), r
   try {
     const [pos, periods, config, settings] = await Promise.all([
       prisma.purchaseOrder.findMany({ where: { company }, include: poInclude }),
-      prisma.capacityPeriod.findMany({ orderBy: { effectiveFrom: "asc" } }),
-      prisma.appConfig.findUnique({ where: { id: 1 } }),
+      prisma.capacityPeriod.findMany({ where: { company }, orderBy: { effectiveFrom: "asc" } }),
+      prisma.appConfig.findUnique({ where: { company } }),
       prisma.appSettings.findUnique({ where: { company } }),
     ]);
     const master = (settings?.master ?? {}) as Record<string, unknown>;
@@ -305,7 +323,11 @@ router.post("/recalculate-production", requireAuth, requirePage("production"), r
       m2PerContainer: Number(config?.m2PerContainer ?? master.m2PerContainer) || 8300,
       workingDaysPerMonth: Number(config?.workingDaysPerMonth ?? master.workingDaysPerMonth) || 26,
     };
-    const updates = recalculateProductionDates(pos, periods, fallback, todayISO());
+    const leadTimes = {
+      standard: Number(config?.leadTimeStandard) || DEFAULT_LEAD_TIMES.standard,
+      nonStandard: Number(config?.leadTimeNonStandard) || DEFAULT_LEAD_TIMES.nonStandard,
+    };
+    const updates = recalculateProductionDates(pos, periods, fallback, todayISO(), leadTimes);
     if (updates.length) {
       await prisma.$transaction(
         updates.flatMap((u) => [
@@ -316,6 +338,7 @@ router.post("/recalculate-production", requireAuth, requirePage("production"), r
               productionComplete: u.productionComplete,
               productionStart: u.productionStart,
               productionEtc: u.productionEtc,
+              planningDate: u.planningDate,
             },
           }),
           prisma.poHistory.create({
@@ -375,6 +398,176 @@ router.get("/:id/pi-pdf", requireAuth, requirePage("orders"), async (req, res) =
   res.send(Buffer.from(pdfBytes));
 });
 
+/**
+ * Email the Proforma Invoice PDF to the internal recipients configured in Master Data
+ * (request #10). Only after approval — the PI is reviewed before it leaves the system.
+ */
+router.post("/:id/email-pi", requireAuth, requirePage("orders"), requirePoEdit, async (req, res) => {
+  const company = getCompany(req);
+  const id = Number(req.params.id);
+  const po = await findPoForCompany(id, company);
+  if (!po) return res.status(404).json({ error: "PO not found" });
+  if (!po.piNo?.trim()) {
+    return res.status(400).json({ error: "PI number is required before emailing the proforma invoice" });
+  }
+  if (!po.piApprovedDate?.trim()) {
+    return res.status(400).json({ error: "The proforma invoice must be approved before it can be emailed" });
+  }
+  if (!isEmailConfigured()) {
+    return res.status(503).json({
+      error: "Email is not configured on this server — set RESEND_API_KEY and MAIL_FROM",
+    });
+  }
+
+  const settings = await prisma.appSettings.findUnique({ where: { company } });
+  const master = (settings?.master ?? {}) as Record<string, unknown>;
+  const configured = parseEmailList(
+    typeof master.piInternalEmails === "string" ? master.piInternalEmails : null,
+  );
+  const to = parseEmailList(
+    Array.isArray(req.body?.to) ? (req.body.to as string[]).join(",") : String(req.body?.to ?? ""),
+  );
+  const recipients = to.length ? to : configured;
+  if (!recipients.length) {
+    return res.status(400).json({
+      error: "No internal PI recipients configured — add them under Master Data → PI internal emails",
+    });
+  }
+
+  const pdfBytes = await generatePiPdf(po, company, settings?.master);
+  const safeName = po.piNo.replace(/[/\\?%*:|"<>]/g, "-");
+  const start = po.productionStart || po.productionBegin || null;
+  const result = await sendMail({
+    to: recipients,
+    subject: `Proforma Invoice ${po.piNo} — PO ${po.poNo}`,
+    text:
+      `Proforma Invoice ${po.piNo} for PO ${po.poNo} (rev ${po.rev ?? 0}) is attached.\n\n` +
+      `PI date: ${po.piDate || "—"}\nApproved: ${po.piApprovedDate}\n` +
+      `Planned production start: ${start || "—"}\nStocking location: ${po.stockingLocation || "—"}\n`,
+    html:
+      `<p>Proforma Invoice <strong>${escapeHtml(po.piNo)}</strong> for PO ` +
+      `<strong>${escapeHtml(po.poNo)}</strong> (rev ${po.rev ?? 0}) is attached.</p>` +
+      `<p>PI date: ${escapeHtml(po.piDate)}<br/>Approved: ${escapeHtml(po.piApprovedDate)}<br/>` +
+      `Planned production start: ${escapeHtml(start)}<br/>` +
+      `Stocking location: ${escapeHtml(po.stockingLocation)}</p>`,
+    attachments: [{ filename: `PI-${safeName}.pdf`, content: Buffer.from(pdfBytes) }],
+  });
+
+  if (!result.sent) return res.status(502).json({ error: result.reason });
+
+  await prisma.$transaction([
+    prisma.purchaseOrder.update({
+      where: { id },
+      data: { piSent: po.piSent || todayISO() },
+    }),
+    prisma.poHistory.create({
+      data: {
+        poId: id,
+        stage: "PI Sent",
+        note: `PI ${po.piNo} emailed to ${recipients.join(", ")}`,
+        userId: req.user!.id,
+        byRole: req.user!.role,
+        at: todayISO(),
+      },
+    }),
+  ]);
+
+  const updated = await findPoForCompany(id, company);
+  res.json({ po: updated, sentTo: recipients });
+});
+
+/**
+ * Open the next revision of a PO (request #23).
+ *
+ * A revision is a new order record at rev + 1 carrying the header and lines forward, so
+ * the pipeline restarts cleanly while the superseded revision stays on file, deactivated
+ * and marked "PO Revised" for history.
+ */
+router.post("/:id/revise", requireAuth, requirePage("upload"), requirePoEdit, async (req, res) => {
+  const company = getCompany(req);
+  const id = Number(req.params.id);
+  const prev = await findPoForCompany(id, company);
+  if (!prev) return res.status(404).json({ error: "PO not found" });
+
+  const reason = String(req.body?.reason ?? "").trim();
+  const latest = await prisma.purchaseOrder.aggregate({
+    where: { company, poNo: prev.poNo },
+    _max: { rev: true },
+  });
+  const rev = (latest._max.rev ?? prev.rev ?? 0) + 1;
+
+  const {
+    id: _id,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    lines: prevLines,
+    history: _history,
+    ...header
+  } = prev as typeof prev & { createdAt?: Date; updatedAt?: Date };
+
+  const result = await prisma.$transaction(async (tx) => {
+    const next = await tx.purchaseOrder.create({
+      data: {
+        ...(header as Prisma.PurchaseOrderUncheckedCreateInput),
+        rev,
+        concat: `${prev.poNo}-${rev}`,
+        status: "PO Received",
+        active: true,
+        // The new revision re-runs the pipeline from the start.
+        planningDate: null,
+        piNo: null,
+        piDate: null,
+        piApprovedDate: null,
+        piSent: null,
+        piRejectedNote: null,
+        ciNo: null,
+        ciDate: null,
+        ciApprovedDate: null,
+        ciRejectedNote: null,
+        revisionSent: null,
+        dpDate: null,
+        dpAmount: null,
+        bpDate: null,
+        bpAmount: null,
+        telexDate: null,
+        arrivalDate: null,
+        lines: {
+          create: (prevLines ?? []).map(({ id: _lineId, poId: _poId, ...line }) => line),
+        },
+        history: {
+          create: {
+            stage: "PO Received",
+            note: `Revision ${rev} of PO ${prev.poNo}${reason ? ` — ${reason}` : ""}`,
+            userId: req.user!.id,
+            byRole: req.user!.role,
+            at: todayISO(),
+          },
+        },
+      },
+      include: poInclude,
+    });
+
+    await tx.purchaseOrder.update({
+      where: { id },
+      data: { status: "PO Revised", active: false },
+    });
+    await tx.poHistory.create({
+      data: {
+        poId: id,
+        stage: "PO Revised",
+        note: `Superseded by revision ${rev}${reason ? ` — ${reason}` : ""}`,
+        userId: req.user!.id,
+        byRole: req.user!.role,
+        at: todayISO(),
+      },
+    });
+
+    return next;
+  });
+
+  res.status(201).json({ po: result });
+});
+
 router.get("/:id/ci-excel", requireAuth, requirePage("orders"), async (req, res) => {
   const company = getCompany(req);
   const id = Number(req.params.id);
@@ -419,9 +612,10 @@ router.post("/", requireAuth, requirePage("upload"), requirePoEdit, async (req, 
     data.concat = `${data.poNo.trim()}-${data.rev ?? 0}`;
   }
   const { lines, ...poData } = data;
+  const perSkid = await sheetsPerSkidFor(company);
   const po = await prisma.purchaseOrder.create({
     data: {
-      ...poCreateData(poData, company, lines),
+      ...poCreateData(poData, company, lines, perSkid),
       history: {
         create: {
           stage: data.status,
@@ -448,10 +642,12 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
   if (!existing) return res.status(404).json({ error: "PO not found" });
 
   const { lines, ...poData } = parsed.data;
+  const perSkid = await sheetsPerSkidFor(company);
   await prisma.$transaction(async (tx) => {
     await tx.purchaseOrder.update({ where: { id }, data: poUpdateData(poData) });
     if (lines) {
-      await syncPoLines(tx, id, lines);
+      await syncPoLines(tx, id, lines, perSkid);
+      await backfillHeaderTotals(tx, id, poData);
     }
   });
 
@@ -574,6 +770,7 @@ async function syncPoLines(
   tx: Pick<typeof prisma, "poLine">,
   poId: number,
   incoming: LineInput[],
+  sheetsPerSkid = 200,
 ) {
   if (incoming.length === 0) {
     await tx.poLine.deleteMany({ where: { poId } });
@@ -586,7 +783,7 @@ async function syncPoLines(
   const keepIds = new Set<number>();
 
   for (const raw of incoming) {
-    const { id: incomingId, ...rest } = raw;
+    const { id: incomingId, ...rest } = completeLineMath(raw, sheetsPerSkid);
     let prev = incomingId != null ? byId.get(incomingId) : undefined;
     if (!prev) prev = byLineNo.get(raw.lineNo);
 
@@ -612,6 +809,30 @@ async function syncPoLines(
   await tx.poLine.deleteMany({
     where: { poId, id: { notIn: [...keepIds] } },
   });
+}
+
+/**
+ * After a line edit, top up header roll-ups the caller did not send explicitly and that
+ * are still blank on the record. An operator-entered figure is never overwritten.
+ */
+async function backfillHeaderTotals(
+  tx: Pick<typeof prisma, "poLine" | "purchaseOrder">,
+  poId: number,
+  supplied: Record<string, unknown>,
+) {
+  const lines = await tx.poLine.findMany({ where: { poId } });
+  const po = await tx.purchaseOrder.findUnique({
+    where: { id: poId },
+    select: { poValue: true, grossInvoiceValue: true, totalM2: true, skids: true },
+  });
+  if (!po) return;
+  const data = missingHeaderTotals(po, lines);
+  for (const key of Object.keys(data)) {
+    if (key in supplied) delete data[key];
+  }
+  if (Object.keys(data).length) {
+    await tx.purchaseOrder.update({ where: { id: poId }, data });
+  }
 }
 
 async function applyProductionLineUpdates(
@@ -1002,6 +1223,7 @@ router.post("/import", requireAuth, requirePage("master"), requireWrite, async (
   if (!Array.isArray(body.pos)) {
     return res.status(400).json({ error: "Expected { pos: [...] }" });
   }
+  const importSheetsPerSkid = await sheetsPerSkidFor(company);
   let imported = 0;
   for (const raw of body.pos) {
     const parsed = poSchema.safeParse(raw);
@@ -1009,7 +1231,7 @@ router.post("/import", requireAuth, requirePage("master"), requireWrite, async (
     const { lines, ...poData } = parsed.data;
     await prisma.purchaseOrder.create({
       data: {
-        ...poCreateData(poData, company, lines),
+        ...poCreateData(poData, company, lines, importSheetsPerSkid),
         history: {
           create: {
             stage: poData.status,

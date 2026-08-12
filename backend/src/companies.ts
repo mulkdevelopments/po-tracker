@@ -15,3 +15,8 @@ export function parseCompany(value: unknown): Company {
 export function companyQuery(company: Company): { company: Company } {
   return { company };
 }
+
+// Cynergy ships to a single stocking location today, and neither the web PO form nor
+// the handwritten order forms state it, so both default to these.
+export const CYNERGY_DEFAULT_STOCKING_LOCATION = "Douglas, GA";
+export const CYNERGY_DEFAULT_PORT = "Savannah";

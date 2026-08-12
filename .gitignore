@@ -11,13 +11,29 @@ coverage/
 .prisma/
 uploads/
 *.pdf
+*.xlsx
+*.xls
+~$*
 !docs/**/*.pdf
+
+# Vite/TS incremental cache
+*.tsbuildinfo
 
 # Vercel CLI
 .vercel
 
 # Local OCR preview images
 .synergy-pdf-preview/
+
+# Production DB dumps (never commit)
+backups/
+
+# Local notes / credentials (do not commit)
+helper.md
+
+# Local reference docs for agents (PDFs, Excel, etc. — do not commit)
+docs for llm reference*
+docs\ for\ llm\ reference\ /
 
 # Separate Cynergy form app (own git repo — do not commit into tracker)
 cynergyform/

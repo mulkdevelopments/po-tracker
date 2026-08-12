@@ -1,4 +1,14 @@
-import type { AuthUser, PurchaseOrder, MasterData, PricingData, AppUser, ReferenceData, AppConfigData } from "./types";
+import type {
+  AuthUser,
+  PurchaseOrder,
+  MasterData,
+  PricingData,
+  AppUser,
+  ReferenceData,
+  AppConfigData,
+  PricingParseResult,
+  PriceListVersionSummary,
+} from "./types";
 import type { Company } from "./companies";
 import {
   STAGE_OWNERS,
@@ -175,6 +185,20 @@ export const api = {
       method: "POST",
     }),
 
+  /** Open the next revision of a PO, deactivating the superseded one. */
+  revisePo: (id: number, reason?: string) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/revise${companyParam()}`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
+  /** Send the approved PI PDF to the internal recipients from Master Data. */
+  emailPi: (id: number, to?: string[]) =>
+    request<{ po: PurchaseOrder; sentTo: string[] }>(`/orders/${id}/email-pi${companyParam()}`, {
+      method: "POST",
+      body: JSON.stringify(to?.length ? { to } : {}),
+    }),
+
   reorderProduction: (orderedIds: number[]) =>
     request<{ pos: PurchaseOrder[] }>(`/orders/reorder-production${companyParam()}`, {
       method: "POST",
@@ -255,6 +279,60 @@ export const api = {
       `/reference/products/${id}/seed-price${companyParam()}`,
       { method: "POST", body: JSON.stringify(data ?? {}) },
     ),
+
+  listPriceLists: () =>
+    request<{ versions: PriceListVersionSummary[] }>(`/reference/price-lists${companyParam()}`),
+
+  getPriceList: (id: number) =>
+    request<{
+      version: PriceListVersionSummary & {
+        prices: {
+          id: number;
+          pricePerSqft: number | null;
+          pricePerM2: number | null;
+          pricePerMsq: number | null;
+          pricePerSheet: number | null;
+          effectiveFrom: string;
+          effectiveTo: string | null;
+          product: {
+            id: number;
+            partNo: string;
+            custPartNo: string | null;
+            vendorPartNo: string | null;
+            itemType: string | null;
+            surface: string | null;
+            construction: string | null;
+            thickness: string | null;
+            widthIn: number | null;
+            widthMm: number | null;
+            lengthIn: number | null;
+            lengthMm: number | null;
+            description: string | null;
+            colorName: string | null;
+            vendorColorCode: string | null;
+            shortColorName: string | null;
+          };
+        }[];
+      };
+    }>(`/reference/price-lists/${id}${companyParam()}`),
+
+  parsePricingExcel: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<PricingParseResult>(`/reference/price-lists/parse-excel${companyParam()}`, {
+      method: "POST",
+      body: fd,
+    });
+  },
+
+  applyPriceList: (data: Record<string, unknown>) =>
+    request<{
+      version: PriceListVersionSummary;
+      stats: { created: number; updated: number; unchanged: number; total: number };
+    }>(`/reference/price-lists/apply${companyParam()}`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 
   refCreate: (entity: string, data: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/reference/${entity}${companyParam()}`, {

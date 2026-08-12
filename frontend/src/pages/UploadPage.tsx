@@ -4,7 +4,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { useCompany } from "../CompanyContext";
-import { PO_SECTIONS, LINE_COLS } from "../poFields";
+import { PO_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
 import type { ReferenceData } from "../types";
 import {
   clearUploadDraft,
@@ -228,6 +228,13 @@ export default function UploadPage() {
   }, [ref]);
 
   const totals = useMemo(() => summarizeLines(lines), [lines]);
+  const lineCols = useMemo(() => lineColsFor(company), [company]);
+
+  // UFP quotes per MSF, Cynergy per sheet — fill only the rate that applies.
+  const unitRateFields = (product: Product, rates: ReturnType<typeof pickProductPrice>) =>
+    company === "SYNERGY"
+      ? { unitMsf: "", unitSheet: toStr(rates?.pricePerSheet ?? product.pricePerSheet) }
+      : { unitMsf: toStr(rates?.pricePerMsq ?? product.pricePerMsq), unitSheet: "" };
 
   // Keep derived header fields in sync. PO value stays from PDF (not catalog).
   useEffect(() => {
@@ -264,9 +271,8 @@ export default function UploadPage() {
           const rates = pickProductPrice(product, asOf);
           const filled: LineForm = {
             ...row,
-            unitMsf: toStr(rates?.pricePerMsq ?? product.pricePerMsq),
+            ...unitRateFields(product, rates),
             unitM2: toStr(rates?.pricePerM2 ?? product.pricePerM2),
-            leadTime: toStr(rates?.leadTimeDays ?? product.leadTimeDays),
             priceAsOf: rates ? asOf : "",
             priceEffectiveFrom: rates ? rates.effectiveFrom : "",
           };
@@ -281,10 +287,12 @@ export default function UploadPage() {
           if (sheets != null && pps != null) catalogExt = sheets * pps;
           else if (qtyM2 != null && ppm2 != null) catalogExt = qtyM2 * ppm2;
           const fromPdf = row.fromPdf === "true" || row.fromPdf === "1";
+          const extInv = qtyM2 != null && ppm2 != null ? qtyM2 * ppm2 : catalogExt;
           return {
             ...filled,
             qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : filled.qtyM2,
             catalogExt: catalogExt != null ? String(Math.round(catalogExt * 100) / 100) : filled.catalogExt,
+            extInv: extInv != null ? String(Math.round(extInv * 100) / 100) : filled.extInv,
             extPo:
               fromPdf && filled.extPo
                 ? filled.extPo
@@ -342,11 +350,13 @@ export default function UploadPage() {
     else if (qtyM2 != null && ppm2 != null) catalogExt = qtyM2 * ppm2;
     const fromPdf = row.fromPdf === "true" || row.fromPdf === "1";
     const skids = skidsFromSheets(sheets, sheetsPerSkid);
+    const extInv = qtyM2 != null && ppm2 != null ? qtyM2 * ppm2 : catalogExt;
     return {
       ...row,
       qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : row.qtyM2,
       qtyMsf: qtyMsf != null ? String(Math.round(qtyMsf * 1000) / 1000) : row.qtyMsf,
       catalogExt: catalogExt != null ? String(Math.round(catalogExt * 100) / 100) : row.catalogExt ?? "",
+      extInv: extInv != null ? String(Math.round(extInv * 100) / 100) : row.extInv,
       // Keep PDF line amount; only fill from catalog when no PDF amount
       extPo:
         fromPdf && row.extPo
@@ -370,9 +380,8 @@ export default function UploadPage() {
       widthMm: toStr(product.widthMm),
       lengthMm: toStr(product.lengthMm),
       color: `${product.vendorColorCode ?? ""} ${product.colorName ?? ""}`.trim(),
-      unitMsf: toStr(rates?.pricePerMsq ?? product.pricePerMsq),
+      ...unitRateFields(product, rates),
       unitM2: toStr(rates?.pricePerM2 ?? product.pricePerM2),
-      leadTime: toStr(rates?.leadTimeDays ?? product.leadTimeDays),
       priceAsOf: rates ? asOf : "",
       priceEffectiveFrom: rates ? rates.effectiveFrom : "",
     };
@@ -749,7 +758,7 @@ export default function UploadPage() {
             </>
           ) : (
             <>
-              Drop a PO (PDF). Typed PDFs are read directly; scanned/image PDFs are run through OCR. Recognized part numbers are auto-filled from the catalog — SI No., totals, skids, and concat are computed for you. Your work is kept as a draft if you switch pages before saving.
+              Drop a PO (PDF). Typed PDFs are read directly; scanned/image PDFs are run through OCR. Recognized part numbers are auto-filled from the catalog — SI No., totals, and skids are computed for you. Your work is kept as a draft if you switch pages before saving.
             </>
           )}
         </div>
@@ -908,7 +917,8 @@ export default function UploadPage() {
               <Link to="/orders" className="font-medium underline hover:text-amber-950">
                 Open Order Summary
               </Link>{" "}
-              to view or edit the existing PO.
+              to edit the existing PO — or use <span className="font-medium">New revision</span> there if
+              the customer has re-issued it, then re-upload against the new revision number.
             </div>
           </div>
         )}
@@ -918,7 +928,7 @@ export default function UploadPage() {
         <div className="flex items-center gap-3 mb-4">
           <div className="font-semibold">Purchase Order details</div>
           <div className="ml-auto text-xs text-slate-500 text-right">
-            <div>SI #{form.siNo || "—"} · {form.concat || "—"}</div>
+            <div>SI #{form.siNo || "—"}{form.poNo ? ` · ${form.poNo}` : ""}</div>
             <div>
               {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · PO {fmtMoney(Number(form.poValue) || totals.pdfLineSum)} · PI{" "}
               {fmtMoney(totals.piValue)} · Gross {fmtMoney(totals.grossInvoiceValue)} · {totals.skids || 0} skids
@@ -948,19 +958,19 @@ export default function UploadPage() {
             <div className="text-xs font-semibold text-slate-500 uppercase">Line Items ({lines.length})</div>
             <button type="button" onClick={addLine} className="text-xs px-2 py-1 border border-slate-300 rounded-md hover:bg-slate-50">+ Add line</button>
           </div>
-          <div className="text-[11px] text-slate-400 mb-2">Enter a Part # and tab out — the catalog fills color, size, prices and lead time, and computes m²/value.</div>
+          <div className="text-[11px] text-slate-400 mb-2">Enter a Part # and tab out — the catalog fills color, size and prices, and computes m²/value.</div>
           <div className="overflow-x-auto">
             <table className="text-xs border-collapse">
               <thead>
                 <tr>
-                  {LINE_COLS.map((c) => <th key={c.k as string} className="text-left px-1 py-1 text-slate-500 font-medium whitespace-nowrap">{c.label}</th>)}
+                  {lineCols.map((c) => <th key={c.k as string} className="text-left px-1 py-1 text-slate-500 font-medium whitespace-nowrap">{c.label}</th>)}
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {lines.map((row, i) => (
                   <tr key={i}>
-                    {LINE_COLS.map((c) => (
+                    {lineCols.map((c) => (
                       <td key={c.k as string} className="p-0.5">
                         <input
                           className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
@@ -976,7 +986,7 @@ export default function UploadPage() {
                   </tr>
                 ))}
                 {lines.length === 0 && (
-                  <tr><td colSpan={LINE_COLS.length + 1} className="text-center text-slate-400 py-4">No lines yet — upload a PO or click “+ Add line”.</td></tr>
+                  <tr><td colSpan={lineCols.length + 1} className="text-center text-slate-400 py-4">No lines yet — upload a PO or click “+ Add line”.</td></tr>
                 )}
               </tbody>
             </table>

@@ -1,0 +1,37 @@
+---
+description: Mulk ecosystem map — always applied so this product understands siblings
+alwaysApply: true
+---
+
+# Mulk Ecosystem (shared context)
+
+You are inside **one product repo** of the Mulk International platform. Sibling apps live under:
+
+`/Users/user/Mulk Ecosystem/`
+
+| Product | Path | Local FE | Local BE | DB | Role |
+|---------|------|----------|----------|-----|------|
+| MULK OS | `MULK OS/` | 3100 | 4100 | 5437 | CEO/chairman command hub (aggregates APIs only) |
+| CRM | `CRM/` | 3000 | 4001 | 5433 | Clients, projects, leads |
+| HRMS | `HRMS/` | 5173 | 4000 | 5434 | Employees (unique id), leave, attendance |
+| PO Tracker | `PO TRACKER/` | 5174 | 4002 | 5436 | Factory, production, shipping, cost, vendors |
+
+Parent map (if readable): `/Users/user/Mulk Ecosystem/ECOSYSTEM.md`
+
+## Architecture rules
+
+- **Separate git repos and databases.** Never share DBs across products.
+- Integrate via **HTTP APIs** + shared IDs (employee / client / project) — future SSO.
+- MULK OS does **not** own operational data; it calls each module’s `/ecosystem/summary` with `X-Ecosystem-Key`.
+- Default bridge key (local): `mulk-dev-bridge`
+- Start all apps: `bash "/Users/user/Mulk Ecosystem/scripts/dev-ecosystem.sh"`
+
+## Domain ownership
+
+| Domain | System of record |
+|--------|------------------|
+| Employee unique id | HRMS |
+| Clients, projects, leads | CRM |
+| Production, shipping, vendors, cost | PO Tracker |
+
+When a change must span two products: implement the API in the **owner**, document the contract, then update consumers (usually MULK OS) in their own Cursor window.

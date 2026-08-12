@@ -6,7 +6,6 @@ export type PriceVersion = {
   pricePerM2?: number | null;
   pricePerMsq?: number | null;
   pricePerSheet?: number | null;
-  leadTimeDays?: number | null;
   effectiveFrom: string;
   effectiveTo?: string | null;
 };
@@ -18,7 +17,6 @@ export type ProductWithPrices = {
   pricePerM2?: number | null;
   pricePerMsq?: number | null;
   pricePerSheet?: number | null;
-  leadTimeDays?: number | null;
   effectiveFrom?: string | null;
   effectiveTo?: string | null;
   prices?: PriceVersion[];
@@ -48,7 +46,6 @@ export function pickProductPrice(
             pricePerM2: product.pricePerM2,
             pricePerMsq: product.pricePerMsq,
             pricePerSheet: product.pricePerSheet,
-            leadTimeDays: product.leadTimeDays,
             effectiveFrom: product.effectiveFrom || "2020-01-01",
             effectiveTo: product.effectiveTo,
           },

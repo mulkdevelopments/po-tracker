@@ -13,7 +13,7 @@ import {
 import PipelineProgress from "./PipelineProgress";
 import PipelineStepActions from "./PipelineStepActions";
 import StageMilestoneEditor from "./StageMilestoneEditor";
-import { PO_SECTIONS as EDIT_SECTIONS, LINE_COLS } from "../poFields";
+import { PO_SECTIONS as EDIT_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
 import {
   PI_PENDING_STATUS,
   PI_REJECTED_STATUS,
@@ -26,12 +26,20 @@ import {
   waitingForStageMessage,
 } from "../piApproval";
 import { notifyPoUpdated } from "../poEvents";
+import { derivedPlanningDate } from "../productionSchedule";
 import { autoShippingUrl } from "../shippingTracking";
 import ResubmitTag from "./ResubmitTag";
 import { ProductionCompleteTrigger, ProductionActualsEditTrigger } from "./ProductionCompleteAdvance";
 import StockingEmailQueue from "./StockingEmailQueue";
 import PiEmailQueue from "./PiEmailQueue";
-import { balancePaymentFlag, downpaymentFlag, resolveGrossInvoiceValue } from "../paymentFlags";
+import {
+  balancePaymentFlag,
+  downpaymentFlag,
+  paymentTolerance,
+  resolveGrossInvoiceValue,
+  sumLineExtInv,
+  sumLineExtPo,
+} from "../paymentFlags";
 
 function ModalPortal({ children }: { children: React.ReactNode }) {
   return createPortal(children, document.body);
@@ -152,6 +160,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [revising, setRevising] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
   const [active, setActive] = useState(true);
   const [lines, setLines] = useState<LineForm[]>([]);
@@ -196,6 +205,25 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to delete order");
       setDeleting(false);
+    }
+  };
+
+  // Request #23: a revised PO becomes rev + 1; the superseded one is kept, deactivated.
+  const handleRevise = async () => {
+    const reason = prompt(
+      `Open revision ${(po.rev ?? 0) + 1} of PO ${po.poNo}?\n\nThe current revision is kept for history and marked "PO Revised". Optional reason:`,
+    );
+    if (reason == null) return;
+    setRevising(true);
+    try {
+      const { po: next } = await api.revisePo(po.id, reason.trim() || undefined);
+      notifyPoUpdated();
+      onUpdated(next);
+      alert(`Revision ${next.rev} created. Update its quantities and prices, then run the pipeline again.`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not create the revision");
+    } finally {
+      setRevising(false);
     }
   };
 
@@ -267,6 +295,12 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
 
   const showActuals = !!po.productionComplete || po.lines.some(lineHasActuals);
   const showLineNotes = po.lines.some((l) => l.actualNotes?.trim());
+  // Cynergy orders are quoted per sheet, UFP per MSF.
+  const sheetBasis = company === "SYNERGY";
+  const editLineCols = lineColsFor(company);
+  const lineExtPoTotal = sumLineExtPo(po.lines);
+  const lineExtInvTotal = sumLineExtInv(po.lines);
+  const trailingLineCols = (showActuals ? 3 : 0) + (showLineNotes ? 1 : 0);
 
   return (
     <>
@@ -301,6 +335,16 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   className="px-3 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 font-medium"
                 >
                   Edit
+                </button>
+              )}
+              {canEdit && !editing && po.status !== "PO Revised" && (
+                <button
+                  type="button"
+                  disabled={revising}
+                  onClick={() => void handleRevise()}
+                  className="px-3 py-1.5 text-sm border border-amber-300 text-amber-800 rounded-md hover:bg-amber-50 font-medium disabled:opacity-50"
+                >
+                  {revising ? "Revising…" : "New revision"}
                 </button>
               )}
               {canDeletePo && onDeleted && !editing && (
@@ -431,7 +475,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 <table className="text-xs border-collapse">
                   <thead>
                     <tr>
-                      {LINE_COLS.map((c) => (
+                      {editLineCols.map((c) => (
                         <th key={c.k as string} className="text-left px-1 py-1 text-slate-500 font-medium whitespace-nowrap">
                           {c.label}
                         </th>
@@ -442,7 +486,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <tbody>
                     {lines.map((row, i) => (
                       <tr key={i}>
-                        {LINE_COLS.map((c) => (
+                        {editLineCols.map((c) => (
                           <td key={c.k as string} className="p-0.5">
                             <input
                               className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
@@ -527,44 +571,54 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                     </div>
                   </div>
                   <div className="border border-slate-200 rounded-lg overflow-x-auto">
-                    <table className="tbl w-full table-fixed min-w-[640px]">
+                    <table className="tbl w-full min-w-[980px]">
                       <thead>
                         <tr>
                           <th className="w-8">#</th>
-                          <th className="w-[14%]">Part #</th>
-                          <th className="w-[12%]">Size</th>
-                          <th className="w-[12%]">Color</th>
-                          <th className="text-right w-14">Sheets</th>
-                          <th className="text-right w-14">M²</th>
-                          <th className="w-24">Price as of</th>
+                          <th>Part #</th>
+                          <th>Size</th>
+                          <th>Color</th>
+                          {!sheetBasis && <th className="text-right">Qty MSF</th>}
+                          <th className="text-right">Qty m²</th>
+                          <th className="text-right">Sheets</th>
+                          <th className="text-right">Skids</th>
+                          <th className="text-right">{sheetBasis ? "Unit /sheet" : "Unit MSF"}</th>
+                          <th className="text-right">Unit m²</th>
+                          <th className="text-right">Ext PO $</th>
+                          <th className="text-right">Ext Inv $</th>
                           {showActuals && (
                             <>
-                              <th className="text-right w-16">Actual sheets</th>
-                              <th className="text-right w-14">Actual M²</th>
-                              <th className="text-right w-14">Actual skids</th>
+                              <th className="text-right">Actual sheets</th>
+                              <th className="text-right">Actual M²</th>
+                              <th className="text-right">Actual skids</th>
                             </>
                           )}
-                          {showLineNotes && <th className="w-[22%]">Line notes</th>}
-                          <th className="text-right w-16">Value</th>
+                          {showLineNotes && <th>Line notes</th>}
                         </tr>
                       </thead>
                       <tbody>
                         {po.lines.map((l) => {
                           const lineNote = l.actualNotes?.trim();
+                          const lineInv =
+                            l.extInv != null && !Number.isNaN(Number(l.extInv))
+                              ? Number(l.extInv)
+                              : l.qtyM2 != null && l.unitM2 != null
+                                ? Number(l.qtyM2) * Number(l.unitM2)
+                                : null;
                           return (
                             <tr key={l.lineNo}>
                               <td>{l.lineNo}</td>
                               <td className="font-mono truncate" title={l.partNo ?? undefined}>{l.partNo}</td>
                               <td className="truncate" title={l.size ?? undefined}>{l.size}</td>
                               <td className="truncate" title={l.color ?? undefined}>{l.color}</td>
-                              <td className="text-right">{fmtNum(l.sheets, 0)}</td>
+                              {!sheetBasis && <td className="text-right">{fmtNum(l.qtyMsf, 3)}</td>}
                               <td className="text-right">{fmtNum(l.qtyM2, 2)}</td>
-                              <td className="text-slate-500 whitespace-nowrap text-[11px]" title={l.priceEffectiveFrom ? `Catalog from ${l.priceEffectiveFrom}` : undefined}>
-                                {l.priceAsOf || "—"}
-                                {l.priceEffectiveFrom ? (
-                                  <span className="text-slate-400"> · from {l.priceEffectiveFrom}</span>
-                                ) : null}
-                              </td>
+                              <td className="text-right">{fmtNum(l.sheets, 0)}</td>
+                              <td className="text-right">{fmtNum(l.skids, 0)}</td>
+                              <td className="text-right">{fmtNum(sheetBasis ? l.unitSheet : l.unitMsf, 2)}</td>
+                              <td className="text-right">{fmtNum(l.unitM2, 2)}</td>
+                              <td className="text-right">{fmtMoney(l.extPo)}</td>
+                              <td className="text-right">{fmtMoney(lineInv)}</td>
                               {showActuals && (
                                 <>
                                   <td className="text-right">
@@ -598,11 +652,20 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                                   )}
                                 </td>
                               )}
-                              <td className="text-right">{fmtMoney(l.extPo)}</td>
                             </tr>
                           );
                         })}
                       </tbody>
+                      <tfoot>
+                        <tr className="bg-slate-50 font-semibold text-slate-700">
+                          <td colSpan={sheetBasis ? 9 : 10} className="text-right">
+                            Totals
+                          </td>
+                          <td className="text-right">{fmtMoney(lineExtPoTotal)}</td>
+                          <td className="text-right">{fmtMoney(lineExtInvTotal)}</td>
+                          {trailingLineCols > 0 && <td colSpan={trailingLineCols} />}
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 </div>
@@ -646,7 +709,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="DP date" val={po.dpDate} />
                   <Field label="DP amount" val={fmtMoney(po.dpAmount)} />
                   {(() => {
-                    const flag = downpaymentFlag(po, master.downpaymentPct ?? 0.5);
+                    const flag = downpaymentFlag(po, master.downpaymentPct ?? 0.5, paymentTolerance(master));
                     if (!flag || flag.kind === "ok") return null;
                     return (
                       <div className="col-span-2">
@@ -714,7 +777,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="BP date" val={po.bpDate} />
                   <Field label="BP amount" val={fmtMoney(po.bpAmount)} />
                   {(() => {
-                    const flag = balancePaymentFlag(po);
+                    const flag = balancePaymentFlag(po, paymentTolerance(master));
                     if (!flag || flag.kind === "ok") return null;
                     return (
                       <div className="col-span-2">
@@ -911,7 +974,11 @@ function buildInitialAdvanceFields(
   }
 
   if (nextStage === "Planning") {
-    if (!out.planningDate) out.planningDate = todayISO();
+    // Derived from the scheduled production start (request #15); today only as a fallback
+    // for orders that have no estimated dates yet.
+    if (!out.planningDate) {
+      out.planningDate = derivedPlanningDate(po, master.leadDays) ?? todayISO();
+    }
   }
   if (nextStage === "PI Generated") {
     if (!out.piDate) out.piDate = todayISO();
@@ -964,8 +1031,6 @@ function buildInitialAdvanceFields(
   }
   if (nextStage === "CI sent") {
     if (!out.ciDate) out.ciDate = todayISO();
-    if (!out.freight && master.freight != null) out.freight = String(master.freight);
-    if (!out.inland && master.inland != null) out.inland = String(master.inland);
     if (!out.ciValue && po.piValue != null) out.ciValue = String(po.piValue);
     else if (!out.ciValue && po.poValue != null) out.ciValue = String(po.poValue);
     if (!out.balanceDue && po.balanceDue != null) out.balanceDue = String(po.balanceDue);
@@ -1085,8 +1150,8 @@ function AdvanceButton({
     "CI sent": [
       { k: "ciNo", label: "CI Number", type: "text", autoNo: true },
       { k: "ciDate", label: "CI Date", type: "date", autoDate: true },
-      { k: "freight", label: "Freight", type: "number", def: master.freight },
-      { k: "inland", label: "Inland", type: "number", def: master.inland },
+      { k: "freight", label: "Freight", type: "number" },
+      { k: "inland", label: "Inland", type: "number" },
       { k: "ciValue", label: "CI Value (USD)", type: "number" },
       { k: "balanceDue", label: "Balance due (USD)", type: "number" },
     ],

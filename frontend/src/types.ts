@@ -1,4 +1,5 @@
 import { STAGES as WORKFLOW_STAGES } from "./workflows";
+import type { Company } from "./companies";
 
 export const STAGES = WORKFLOW_STAGES;
 
@@ -81,9 +82,10 @@ export interface PoLine {
   skids?: number | null;
   unitMsf?: number | null;
   unitM2?: number | null;
+  /** Cynergy quotes per sheet rather than per MSF */
+  unitSheet?: number | null;
   extPo?: number | null;
   extInv?: number | null;
-  leadTime?: number | null;
   notes?: string | null;
   /** Date used to look up catalog price (usually PO date) */
   priceAsOf?: string | null;
@@ -178,7 +180,6 @@ export interface PurchaseOrder {
 }
 
 export interface MasterData {
-  stages?: string[];
   stockingLocations?: string[];
   uaeSites?: string[];
   defaultProductionSite?: string;
@@ -187,8 +188,6 @@ export interface MasterData {
   piInternalEmails?: string;
   portsOfEntry?: Record<string, string>;
   sailingDays?: Record<string, number>;
-  freight?: number;
-  inland?: number;
   sheetsPerSkid?: number;
   containerMaxM2?: number;
   leadDays?: { standard: number; nonStandard: number };
@@ -198,6 +197,9 @@ export interface MasterData {
   m2PerContainer?: number;
   workingDaysPerMonth?: number;
   downpaymentPct?: number;
+  /** Variance allowed before a payment is flagged under/over (request #3). */
+  paymentTolerancePct?: number;
+  paymentToleranceAbs?: number;
   piDocument?: PiDocumentSettings;
 }
 
@@ -233,11 +235,21 @@ export interface ReferenceData {
   ports: { id: number; name: string; sailingDays: number | null; freight: number | null; inland: number | null }[];
   stockingLocations: { id: number; name: string; arrivalPort: string | null; email: string | null }[];
   shippingLines: { id: number; name: string; trackingUrl: string | null }[];
-  colors: { id: number; code: string; name: string | null; isStandard: boolean }[];
+  colors: {
+    id: number;
+    code: string;
+    name: string | null;
+    /** Cynergy's own short colour name, e.g. BLACK for GLOSSY BLACK. */
+    shortName: string | null;
+    construction: string | null;
+    isStandard: boolean;
+  }[];
   products: {
     id: number;
+    /** Cynergy keys its catalogue on the full item description, not a product code. */
     partNo: string;
     custPartNo: string | null;
+    vendorPartNo: string | null;
     itemType: string | null;
     surface: string | null;
     construction: string | null;
@@ -249,11 +261,11 @@ export interface ReferenceData {
     description: string | null;
     colorName: string | null;
     vendorColorCode: string | null;
+    shortColorName: string | null;
     pricePerSqft: number | null;
     pricePerM2: number | null;
     pricePerMsq: number | null;
     pricePerSheet: number | null;
-    leadTimeDays: number | null;
     effectiveFrom: string | null;
     effectiveTo: string | null;
     prices?: {
@@ -262,7 +274,6 @@ export interface ReferenceData {
       pricePerM2: number | null;
       pricePerMsq: number | null;
       pricePerSheet: number | null;
-      leadTimeDays: number | null;
       effectiveFrom: string;
       effectiveTo: string | null;
       createdAt?: string;
@@ -270,10 +281,69 @@ export interface ReferenceData {
   }[];
   config: AppConfigData | null;
   capacityPeriods: CapacityPeriod[];
+  priceLists?: PriceListVersionSummary[];
+}
+
+export interface PriceListVersionSummary {
+  id: number;
+  company?: Company;
+  label: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  status: "LIVE" | "PAST";
+  sourceSheet: string | null;
+  sourceFile: string | null;
+  note: string | null;
+  createdAt: string;
+  _count?: { prices: number };
+}
+
+export interface PricingPreviewRow {
+  partNo: string;
+  custPartNo: string | null;
+  vendorPartNo: string | null;
+  itemType: string | null;
+  surface: string | null;
+  construction: string | null;
+  thickness: string | null;
+  widthIn: number | null;
+  widthMm: number | null;
+  lengthIn: number | null;
+  lengthMm: number | null;
+  description: string | null;
+  colorName: string | null;
+  vendorColorCode: string | null;
+  shortColorName: string | null;
+  pricePerSqft: number | null;
+  pricePerM2: number | null;
+  pricePerMsq: number | null;
+  pricePerSheet: number | null;
+  productId: number | null;
+  change: "new" | "changed" | "unchanged";
+  current: {
+    pricePerSqft: number | null;
+    pricePerM2: number | null;
+    pricePerMsq: number | null;
+    pricePerSheet: number | null;
+    effectiveFrom: string;
+  } | null;
+}
+
+export interface PricingParseResult {
+  fileName: string;
+  fileSheetNames: string[];
+  sheets: {
+    name: string;
+    guessedEffectiveFrom: string | null;
+    guessedEffectiveTo: string | null;
+    summary: { total: number; new: number; changed: number; unchanged: number };
+    rows: PricingPreviewRow[];
+  }[];
 }
 
 export interface CapacityPeriod {
   id: number;
+  company?: Company;
   effectiveFrom: string;
   effectiveTo: string | null;
   label: string | null;
@@ -285,11 +355,16 @@ export interface CapacityPeriod {
 
 export interface AppConfigData {
   id: number;
+  company?: Company;
   sheetsPerSkid: number | null;
   downpaymentPct: number | null;
+  /** Days after the commercial invoice that the balance is due (Cynergy = 10). */
+  finalPaymentDays: number | null;
   containerMaxM2: number | null;
   leadTimeStandard: number | null;
   leadTimeNonStandard: number | null;
+  paymentTolerancePct: number | null;
+  paymentToleranceAbs: number | null;
   originPort: string | null;
   pricingNote: string | null;
   productionLines: number | null;

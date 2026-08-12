@@ -57,6 +57,41 @@ export function plannedProductionStart(p: {
   return parseISODate(p.productionStart) ?? parseISODate(p.productionBegin);
 }
 
+export type LeadTimes = { standard: number; nonStandard: number };
+
+export const DEFAULT_LEAD_TIMES: LeadTimes = { standard: 45, nonStandard: 90 };
+
+/** "No" / "N" means the order contains non-standard colours and uses the longer lead time. */
+function usesStandardLeadTime(standardColorsOnly: string | null | undefined): boolean {
+  const v = String(standardColorsOnly ?? "").trim();
+  if (!v) return true;
+  return !/^(no|n|non|non-standard|nonstandard|false)$/i.test(v);
+}
+
+/**
+ * Planning date is derived, not typed: planning must be finished by the lead-time
+ * cut-off for the scheduled production start (standard vs non-standard colours),
+ * and never before the order itself was placed.
+ */
+export function derivedPlanningDate(
+  p: {
+    poDate?: string | null;
+    productionStart?: string | null;
+    productionBegin?: string | null;
+    standardColorsOnly?: string | null;
+  },
+  leadTimes: LeadTimes = DEFAULT_LEAD_TIMES,
+): string | null {
+  const start = plannedProductionStart(p);
+  if (!start) return null;
+  const lead = usesStandardLeadTime(p.standardColorsOnly)
+    ? leadTimes.standard
+    : leadTimes.nonStandard;
+  const cutoff = addDaysISO(start, -Math.max(0, Number(lead) || 0));
+  const poDate = parseISODate(p.poDate);
+  return poDate && cutoff < poDate ? poDate : cutoff;
+}
+
 function addDaysISO(iso: string, days: number): string {
   const base = parseISODate(iso);
   if (!base) return iso;

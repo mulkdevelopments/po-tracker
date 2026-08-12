@@ -12,6 +12,26 @@ export function fmtNum(v: unknown, d = 2): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
+/** Catalog prices as shown on the Excel sheet (fixed decimals, not rounded away). */
+export function fmtPrice(v: unknown, decimals: number): string {
+  if (v == null || v === "") return "";
+  const n = Number(v);
+  if (isNaN(n)) return String(v);
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+/** Length-in can be 90.5; mm/width are usually whole numbers. */
+export function fmtDim(v: unknown): string {
+  if (v == null || v === "") return "";
+  const n = Number(v);
+  if (isNaN(n)) return String(v);
+  if (Number.isInteger(n)) return String(n);
+  return n.toLocaleString("en-US", { maximumFractionDigits: 4, minimumFractionDigits: 0 });
+}
+
 export function fmtDate(v: unknown): string {
   return v ? String(v) : "";
 }

@@ -32,7 +32,12 @@ export default function StockingEmailNotice({ pending, onOpenPo }: Props) {
           {count}
         </span>
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-violet-950 leading-tight">Client emails pending</div>
+          <div className="text-sm font-semibold text-violet-950 leading-tight">
+            Stocking location emails pending
+          </div>
+          <div className="text-xs text-violet-800">
+            Shipping details not yet emailed to the stocking location contact.
+          </div>
           <div className="text-xs text-violet-800 truncate">
             {preview.map((p) => p.poNo).join(", ")}
             {count > preview.length ? ` +${count - preview.length} more` : ""}

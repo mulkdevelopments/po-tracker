@@ -44,18 +44,15 @@ export const UFP_WORKFLOW: WorkflowGroup[] = withParallel([
     substages: [{ id: "Planning", label: "Planning complete" }],
   },
   {
+    // Request #19: Proforma Invoice and Downpayment are tracked as one stage.
     id: "pi",
-    label: "Proforma Invoice",
+    label: "Proforma Invoice & Downpayment",
     substages: [
       { id: "PI Generated", label: "Proforma Invoice Generated" },
       { id: "PI Approved", label: "Proforma Invoice Approved" },
       { id: "PI Sent", label: "Proforma Invoice Sent" },
+      { id: "Downpayment Received", label: "Downpayment Received" },
     ],
-  },
-  {
-    id: "downpayment",
-    label: "Downpayment",
-    substages: [{ id: "Downpayment Received", label: "Downpayment Received" }],
   },
   {
     id: "production",

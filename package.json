@@ -1,0 +1,11 @@
+{
+  "name": "po-tracker",
+  "private": true,
+  "description": "PO Tracker — factory, production, shipping, cost",
+  "scripts": {
+    "dev": "bash ./dev.sh",
+    "dev:api": "npm run dev --prefix backend",
+    "dev:web": "npm run dev --prefix frontend",
+    "db:up": "docker compose up db -d"
+  }
+}

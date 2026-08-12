@@ -16,10 +16,39 @@ async function getOrCreateSettings(company: ReturnType<typeof parseCompany>) {
   return settings;
 }
 
+/**
+ * Constants that live in AppConfig (and are edited there) but which the Master Data
+ * and Orders screens read off `master`. Merged on read so the two never drift.
+ */
+async function masterWithConfig(
+  company: ReturnType<typeof parseCompany>,
+  master: unknown,
+): Promise<Record<string, unknown>> {
+  const base = master && typeof master === "object" ? { ...(master as Record<string, unknown>) } : {};
+  const config = await prisma.appConfig.findUnique({ where: { company } });
+  if (!config) return base;
+  return {
+    ...base,
+    sheetsPerSkid: config.sheetsPerSkid ?? base.sheetsPerSkid,
+    containerMaxM2: config.containerMaxM2 ?? base.containerMaxM2,
+    downpaymentPct: config.downpaymentPct ?? base.downpaymentPct,
+    leadDays: {
+      standard: config.leadTimeStandard ?? 45,
+      nonStandard: config.leadTimeNonStandard ?? 90,
+    },
+    paymentTolerancePct: config.paymentTolerancePct ?? 0.01,
+    paymentToleranceAbs: config.paymentToleranceAbs ?? 1,
+  };
+}
+
 router.get("/", requireAuth, async (req, res) => {
   const company = parseCompany(req.query.company);
   const settings = await getOrCreateSettings(company);
-  res.json({ master: settings.master, pricing: settings.pricing, company });
+  res.json({
+    master: await masterWithConfig(company, settings.master),
+    pricing: settings.pricing,
+    company,
+  });
 });
 
 const updateSchema = z.object({
@@ -48,7 +77,11 @@ router.patch("/", requireAuth, requirePage("master"), requireWrite, async (req, 
     create: { company, ...data },
     update: data,
   });
-  res.json({ master: settings.master, pricing: settings.pricing, company });
+  res.json({
+    master: await masterWithConfig(company, settings.master),
+    pricing: settings.pricing,
+    company,
+  });
 });
 
 export default router;

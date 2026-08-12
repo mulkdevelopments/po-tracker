@@ -41,8 +41,9 @@ model User {
   updatedAt       DateTime    @updatedAt
   createdById     String?
   createdBy       User?       @relation("UserCreatedBy", fields: [createdById], references: [id])
-  createdUsers    User[]      @relation("UserCreatedBy")
-  poHistory       PoHistory[]
+  createdUsers       User[]             @relation("UserCreatedBy")
+  poHistory          PoHistory[]
+  priceListVersions  PriceListVersion[]
 }
 
 model PurchaseOrder {
@@ -142,9 +143,10 @@ model PoLine {
   skids      Float?
   unitMsf    Float?
   unitM2     Float?
+  /// Cynergy quotes per sheet rather than per MSF
+  unitSheet  Float?
   extPo      Float?
   extInv     Float?
-  leadTime        Int?
   notes           String?
   /// Date used to look up the price (usually PO date)
   priceAsOf       String?
@@ -156,46 +158,74 @@ model PoLine {
   actualNotes     String?
 }
 
-// ---------- Shared reference / master data (global, not per-company) ----------
+// ---------- Reference / master data (per-company: UFP and Cynergy are kept separate) ----------
 
 model ProcessStage {
-  id    Int    @id @default(autoincrement())
-  order Int    @unique
-  name  String @unique
+  id      Int     @id @default(autoincrement())
+  company Company @default(UFP)
+  order   Int
+  name    String
+
+  @@unique([company, order])
+  @@unique([company, name])
 }
 
 model Port {
   id          Int     @id @default(autoincrement())
-  name        String  @unique
+  company     Company @default(UFP)
+  name        String
   sailingDays Int?
   freight     Float?
   inland      Float?
+
+  @@unique([company, name])
 }
 
 model StockingLocation {
   id          Int     @id @default(autoincrement())
-  name        String  @unique
+  company     Company @default(UFP)
+  name        String
   arrivalPort String?
   email       String?
+
+  @@unique([company, name])
 }
 
 model ShippingLine {
   id          Int     @id @default(autoincrement())
-  name        String  @unique
+  company     Company @default(UFP)
+  name        String
   trackingUrl String?
+
+  @@unique([company, name])
 }
 
 model Color {
   id         Int     @id @default(autoincrement())
-  code       String  @unique
+  company    Company @default(UFP)
+  /// Vendor colour code, e.g. ASC 0096
+  code       String
+  /// Vendor colour name, e.g. GLOSSY BLACK
   name       String?
+  /// Cynergy's own short name for the colour, e.g. BLACK. Cynergy POs reference this.
+  shortName  String?
+  /// ACM (Cynergy) / ACP (UFP)
+  construction String?
   isStandard Boolean @default(false)
+
+  @@unique([company, code])
 }
 
 model Product {
   id              Int     @id @default(autoincrement())
-  partNo          String  @unique
+  company         Company @default(UFP)
+  /// Key used by this company's price sheet: UFP = Product Code 1 (704984);
+  /// Cynergy = Full Item Description (2MM ACM 49" x 96" ASC 0069 GLOSSY WHITE),
+  /// because most Cynergy items have no product code at all.
+  partNo          String
   custPartNo      String?
+  /// Cynergy Product Code 1 — optional, only ~1/3 of Cynergy items carry one.
+  vendorPartNo    String?
   itemType        String?
   surface         String?
   construction    String?
@@ -207,15 +237,45 @@ model Product {
   description     String?
   colorName       String?
   vendorColorCode String?
+  /// Cynergy Color (short name, e.g. BLACK) — how Cynergy POs identify colour.
+  shortColorName  String?
   /// Current open price (denormalized from latest ProductPrice for fast lookup)
   pricePerSqft    Float?
   pricePerM2      Float?
   pricePerMsq     Float?
   pricePerSheet   Float?
-  leadTimeDays    Int?
   effectiveFrom   String?
   effectiveTo     String?
   prices          ProductPrice[]
+
+  @@unique([company, partNo])
+  @@index([company])
+}
+
+/// Named pricing table apply (Excel upload). Live = current open list; Past = superseded/historical.
+enum PriceListStatus {
+  LIVE
+  PAST
+}
+
+model PriceListVersion {
+  id            Int             @id @default(autoincrement())
+  company       Company         @default(UFP)
+  label         String
+  /// Inclusive start for this table (YYYY-MM-DD)
+  effectiveFrom String
+  /// Inclusive end. Null while LIVE / open-ended.
+  effectiveTo   String?
+  status        PriceListStatus @default(LIVE)
+  sourceSheet   String?
+  sourceFile    String?
+  note          String?
+  createdAt     DateTime        @default(now())
+  createdById   String?
+  createdBy     User?           @relation(fields: [createdById], references: [id])
+  prices        ProductPrice[]
+
+  @@index([company, status, effectiveFrom])
 }
 
 /// Dated price versions — updating price creates a new row; old POs keep stamped line rates.
@@ -223,11 +283,12 @@ model ProductPrice {
   id            Int      @id @default(autoincrement())
   productId     Int
   product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceListVersionId Int?
+  priceListVersion   PriceListVersion? @relation(fields: [priceListVersionId], references: [id], onDelete: SetNull)
   pricePerSqft  Float?
   pricePerM2    Float?
   pricePerMsq   Float?
   pricePerSheet Float?
-  leadTimeDays  Int?
   /// Inclusive start (YYYY-MM-DD)
   effectiveFrom String
   /// Inclusive end (YYYY-MM-DD). Null = current / open-ended.
@@ -235,10 +296,12 @@ model ProductPrice {
   createdAt     DateTime @default(now())
 
   @@index([productId, effectiveFrom])
+  @@index([priceListVersionId])
 }
 
 model CapacityPeriod {
   id                  Int     @id @default(autoincrement())
+  company             Company @default(UFP)
   /// Inclusive start (YYYY-MM-DD)
   effectiveFrom       String
   /// Inclusive end (YYYY-MM-DD). Null = current / open-ended.
@@ -251,16 +314,22 @@ model CapacityPeriod {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  @@index([effectiveFrom])
+  @@index([company, effectiveFrom])
 }
 
 model AppConfig {
-  id                  Int     @id @default(1)
+  id                  Int     @id @default(autoincrement())
+  company             Company @unique @default(UFP)
   sheetsPerSkid       Int?
   downpaymentPct      Float?
+  /// Days after commercial invoice that the balance is due (Cynergy = 10).
+  finalPaymentDays    Int?
   containerMaxM2      Float?
   leadTimeStandard    Int?
   leadTimeNonStandard Int?
+  /// Payment variance allowed before a DP / balance payment is flagged.
+  paymentTolerancePct Float?  @default(0.01)
+  paymentToleranceAbs Float?  @default(1)
   originPort          String?
   pricingNote         String?
   productionLines     Int?    @default(2)

@@ -43,9 +43,9 @@ export default function StockingEmailQueue({ po, user, locations, onUpdated }: P
       <div className="rounded-lg border border-violet-200 bg-violet-50 p-4">
         <div className="flex flex-wrap items-start gap-3 mb-3">
           <div>
-            <div className="text-sm font-semibold text-violet-950">Email queue — client</div>
+            <div className="text-sm font-semibold text-violet-950">Stocking location email</div>
             <p className="text-xs text-violet-800 mt-0.5">
-              Notify the client after CI sent. Send the email, then mark as sent when done.
+              Notify the stocking location after CI is sent. Open the email, then mark as sent when done.
             </p>
           </div>
           <span
@@ -59,7 +59,7 @@ export default function StockingEmailQueue({ po, user, locations, onUpdated }: P
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-3">
           <div>
-            <div className="text-[11px] uppercase text-violet-700">Client</div>
+            <div className="text-[11px] uppercase text-violet-700">Stocking location</div>
             <div className="font-medium text-violet-950">{po.stockingLocation || "—"}</div>
           </div>
           <div>
@@ -70,7 +70,7 @@ export default function StockingEmailQueue({ po, user, locations, onUpdated }: P
               </a>
             ) : (
               <div className="text-amber-900 text-xs">
-                No client email configured — add one in{" "}
+                No stocking-location email configured — add one in{" "}
                 <a href="/master" className="font-medium underline">
                   Master Data
                 </a>

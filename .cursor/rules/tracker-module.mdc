@@ -1,0 +1,31 @@
+---
+description: PO Tracker module role within the Mulk ecosystem
+alwaysApply: true
+---
+
+# PO Tracker (this repo)
+
+Purchase-order / operations tracker — system of record for **factory, production, shipping, cost, vendors**.
+
+## Stack / ports
+
+- Frontend: Vite/React → http://localhost:5174
+- Backend: Express + Prisma → http://localhost:4002
+- Postgres: 5436
+
+## Ecosystem duties
+
+- Expose `GET /api/ecosystem/summary` for MULK OS (`X-Ecosystem-Key`).
+- Do not replace CRM as client/project master; link by IDs later.
+- Do not own employees — that is HRMS.
+- Keep JWT auth on normal APIs; ecosystem bridge uses the shared key only.
+
+## Local
+
+```bash
+# DB
+docker compose up -d db
+# API + web (separate terminals)
+npm run dev --prefix backend
+npm run dev --prefix frontend
+```

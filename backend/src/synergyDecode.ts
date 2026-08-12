@@ -2,6 +2,7 @@
 
 import type { Product, ProductPrice } from "@prisma/client";
 import { pickPriceForDate, ratesFromProduct } from "./productPricing.js";
+import { CYNERGY_DEFAULT_PORT, CYNERGY_DEFAULT_STOCKING_LOCATION } from "./companies.js";
 
 export type SynergyProductRow = Product & { prices?: ProductPrice[] };
 
@@ -127,14 +128,16 @@ function lineFromProduct(
   const pricePerM2 = rates?.pricePerM2 ?? null;
   const pricePerMsq = rates?.pricePerMsq ?? null;
   const pricePerSheet = rates?.pricePerSheet ?? null;
-  const leadTimeDays = rates?.leadTimeDays ?? null;
   const m2PerSheet = p.widthMm && p.lengthMm ? (p.widthMm * p.lengthMm) / 1_000_000 : null;
   const sqftPerSheet = p.widthIn && p.lengthIn ? (p.widthIn * p.lengthIn) / 144 : null;
   const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
   const qtyMsf = sheets != null && sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
-  let extPo: number | null = null;
-  if (sheets != null && pricePerSheet != null) extPo = sheets * pricePerSheet;
-  else if (qtyM2 != null && pricePerM2 != null) extPo = qtyM2 * pricePerM2;
+
+  // Cynergy carries a single sheet-based extended value (see cynergyForm.buildPoLine).
+  const unitSheet = pricePerSheet != null ? Math.round(pricePerSheet * 100) / 100 : null;
+  let ext: number | null = null;
+  if (sheets != null && unitSheet != null) ext = sheets * unitSheet;
+  else if (qtyM2 != null && pricePerM2 != null) ext = qtyM2 * pricePerM2;
   const sizeLabel = [p.thickness, p.widthIn ? `${p.widthIn}"` : "", p.lengthIn ? `x ${p.lengthIn}"` : "", p.construction]
     .filter(Boolean)
     .join(" ");
@@ -150,10 +153,11 @@ function lineFromProduct(
     qtyM2,
     sheets,
     skids: skidsFromSheets(sheets, sheetsPerSkid),
-    unitMsf: pricePerMsq,
+    unitMsf: null,
     unitM2: pricePerM2,
-    extPo,
-    leadTime: leadTimeDays,
+    unitSheet,
+    extPo: ext,
+    extInv: ext,
     priceAsOf: rates ? asOf : null,
     priceEffectiveFrom: rates?.effectiveFrom ?? null,
     matched: true,
@@ -377,6 +381,7 @@ export function guessSynergyPage(text: string, ref: SynergyRef, page = 1) {
         qtyMsf: null,
         unitMsf: null,
         unitM2: null,
+        unitSheet: null,
         extPo: null,
         matched: false,
         rawDescription: row.description,
@@ -391,8 +396,8 @@ export function guessSynergyPage(text: string, ref: SynergyRef, page = 1) {
     poNo,
     rev: 0,
     poDate,
-    stockingLocation: "",
-    portOfDest: "",
+    stockingLocation: CYNERGY_DEFAULT_STOCKING_LOCATION,
+    portOfDest: CYNERGY_DEFAULT_PORT,
     lines,
     matchedCount,
     rawLineCount: rawRows.length,

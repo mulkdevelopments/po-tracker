@@ -12,6 +12,7 @@ import {
 import { autoShippingUrl } from "../shippingTracking";
 import { getStageFieldDefs, STAGE_MILESTONE_KEYS, type StageFieldDef } from "../stageMilestones";
 import { notifyPoUpdated } from "../poEvents";
+import { derivedPlanningDate } from "../productionSchedule";
 
 function toStr(v: unknown): string {
   if (v == null || v === "N/A") return "";
@@ -92,6 +93,11 @@ export default function StageMilestoneEditor({
     for (const f of defs) {
       if (f.autoDate && !next[f.k]) next[f.k] = todayISO();
       if (f.def != null && f.def !== "" && !next[f.k]) next[f.k] = String(f.def);
+    }
+    if (stageId === "Planning") {
+      // Planning date follows the estimated production start (request #15).
+      const derived = derivedPlanningDate(po, master.leadDays);
+      if (derived) next.planningDate = derived;
     }
     if (stageId === "PI Generated" && !next.piNo) {
       const { value } = await api.getNextDocNo("pi", po.id);

@@ -21,7 +21,7 @@ body {
   white-space: nowrap;
 }
 
-.tbl th {
+.tbl > thead > tr > th {
   background: #f8fafc;
   font-weight: 600;
   font-size: 11px;
@@ -34,16 +34,37 @@ body {
   top: 0;
 }
 
-.tbl td {
+.tbl > tbody > tr > td {
   padding: 8px 10px;
   border-bottom: 1px solid #f1f5f9;
   font-size: 13px;
   vertical-align: top;
 }
 
-.tbl tr:hover td {
+.tbl > tbody > tr:hover > td {
   background: #f8fafc;
 }
+
+.pricing-list {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.pricing-list > thead > tr > th,
+.pricing-list > tbody > tr > td {
+  white-space: normal;
+  word-break: break-word;
+  vertical-align: top;
+  text-align: left;
+}
+
+.pricing-list > thead > tr > th.num,
+.pricing-list > tbody > tr > td.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 
 .pipeline-panel {
   margin: 0 1.5rem 1rem;
@@ -593,6 +614,7 @@ button.pipeline-checklist-item {
 
 .app-content {
   flex: 1;
+  min-width: 0;
   padding: 1rem;
   padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
   overflow-x: auto;
