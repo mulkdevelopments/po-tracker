@@ -41,7 +41,7 @@ async function run(apply: boolean) {
   );
   const fills = Object.fromEntries(FIELDS.map((f) => [f, 0])) as Record<Field, number>;
   const conflicts: string[] = [];
-  let missingOrders = 0;
+  const missing: string[] = [];
   let touched = 0;
 
   for (const row of rows) {
@@ -49,7 +49,7 @@ async function run(apply: boolean) {
       where: { company: "UFP", poNo: row.poNo, rev: row.rev },
     });
     if (!po) {
-      missingOrders++;
+      missing.push(`${row.poNo} r${row.rev}`);
       continue;
     }
     const data: Partial<Record<Field, string>> = {};
@@ -69,7 +69,8 @@ async function run(apply: boolean) {
     if (apply) await prisma.purchaseOrder.update({ where: { id: po.id }, data });
   }
 
-  console.log(`Tracker rows: ${rows.length} · orders not found: ${missingOrders}`);
+  console.log(`Tracker rows: ${rows.length} · orders not found: ${missing.length}`);
+  if (missing.length) console.log(`  not in this database: ${missing.join(", ")}`);
   console.log(`Orders with fields to fill: ${touched}`);
   for (const f of FIELDS) if (fills[f]) console.log(`  ${f}: ${fills[f]}`);
   if (conflicts.length) {
