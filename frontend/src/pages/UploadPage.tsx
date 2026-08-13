@@ -13,14 +13,15 @@ import {
   saveUploadDraft,
 } from "../uploadDraft";
 import { extractSynergyPdfPages } from "../synergyPdf";
-import { pickProductPrice } from "../productPricing";
 import { fmtMoney, fmtNum, todayISO } from "../utils";
 import MoneyInput from "../components/MoneyInput";
+import { LINE_RECOMPUTE_KEYS, type LineForm as SharedLineForm } from "../lineMath";
 import {
-  LINE_RECOMPUTE_KEYS,
-  recomputeLineForm,
-  type LineForm as SharedLineForm,
-} from "../lineMath";
+  computeLineWithCatalog,
+  fillLineFromProduct,
+  priceAsOfFor,
+  repriceLineFromProduct,
+} from "../lineCatalog";
 import {
   describeMismatch,
   linePriceMismatch,
@@ -254,12 +255,6 @@ export default function UploadPage() {
     [form.poValue, form.custPoTotal],
   );
 
-  // UFP quotes per MSF, Cynergy per sheet — fill only the rate that applies.
-  const unitRateFields = (product: Product, rates: ReturnType<typeof pickProductPrice>) =>
-    company === "SYNERGY"
-      ? { unitMsf: "", unitSheet: toStr(rates?.pricePerSheet ?? product.pricePerSheet) }
-      : { unitMsf: toStr(rates?.pricePerMsq ?? product.pricePerMsq), unitSheet: "" };
-
   // Keep derived header fields in sync — including PO value, which follows our priced lines.
   useEffect(() => {
     const rev = Math.round(Number(form.rev || 0)) || 0;
@@ -296,18 +291,12 @@ export default function UploadPage() {
     if (k === "poDate") {
       setForm((f) => ({ ...f, poDate: v }));
       // Re-apply catalog rates for the new PO date (does not change saved POs)
-      const asOf = (v.trim() || todayISO()).slice(0, 10);
+      const asOf = priceAsOfFor(v);
       setLines((prev) =>
         prev.map((row) => {
           const product = row.partNo ? productMap.get(row.partNo.trim()) : undefined;
           if (!product) return row;
-          const rates = pickProductPrice(product, asOf);
-          const repriced: LineForm = {
-            ...row,
-            ...unitRateFields(product, rates),
-            unitM2: toStr(rates?.pricePerM2 ?? product.pricePerM2),
-          };
-          return computeLine(repriced, "sheets", asOf);
+          return computeLine(repriceLineFromProduct(row, product, company, asOf), "sheets", asOf);
         }),
       );
       return;
@@ -334,46 +323,20 @@ export default function UploadPage() {
     void checkDuplicate(form.poNo, form.rev ?? "0");
   }, [form.poNo, form.rev, checkDuplicate]);
 
-  const priceAsOfDate = () => (form.poDate?.trim() || todayISO()).slice(0, 10);
+  const priceAsOfDate = () => priceAsOfFor(form.poDate ?? null);
 
   // Recompute derived line numbers. Rates always come from our price list, never from the PO.
-  const computeLine = (row: LineForm, changedKey = "sheets", asOfOverride?: string): LineForm => {
-    const product = row.partNo ? productMap.get(row.partNo) : undefined;
-    const asOf = asOfOverride ?? priceAsOfDate();
-    const rates = product ? pickProductPrice(product, asOf) : null;
-    const withDims: LineForm = {
-      ...row,
-      widthMm: row.widthMm || toStr(product?.widthMm),
-      lengthMm: row.lengthMm || toStr(product?.lengthMm),
-      unitM2: row.unitM2 || toStr(rates?.pricePerM2 ?? product?.pricePerM2),
-      ...(company === "SYNERGY"
-        ? { unitSheet: row.unitSheet || toStr(rates?.pricePerSheet ?? product?.pricePerSheet) }
-        : { unitMsf: row.unitMsf || toStr(rates?.pricePerMsq ?? product?.pricePerMsq) }),
-    };
-    const next = recomputeLineForm(withDims, changedKey, sheetsPerSkid);
-    return {
-      ...next,
-      priceAsOf: rates ? asOf : row.priceAsOf ?? "",
-      priceEffectiveFrom: rates ? rates.effectiveFrom : row.priceEffectiveFrom ?? "",
-    };
-  };
+  const computeLine = (row: LineForm, changedKey = "sheets", asOfOverride?: string): LineForm =>
+    computeLineWithCatalog(row, {
+      product: row.partNo ? productMap.get(row.partNo) : undefined,
+      company,
+      asOf: asOfOverride ?? priceAsOfDate(),
+      sheetsPerSkid,
+      changedKey,
+    });
 
-  const fillFromProduct = (row: LineForm, product: Product): LineForm => {
-    const asOf = priceAsOfDate();
-    const rates = pickProductPrice(product, asOf);
-    return {
-      ...row,
-      custPartNo: toStr(product.custPartNo),
-      size: [product.thickness, product.widthIn ? `${product.widthIn}"` : "", product.lengthIn ? `x ${product.lengthIn}"` : "", product.construction].filter(Boolean).join(" "),
-      widthMm: toStr(product.widthMm),
-      lengthMm: toStr(product.lengthMm),
-      color: `${product.vendorColorCode ?? ""} ${product.colorName ?? ""}`.trim(),
-      ...unitRateFields(product, rates),
-      unitM2: toStr(rates?.pricePerM2 ?? product.pricePerM2),
-      priceAsOf: rates ? asOf : "",
-      priceEffectiveFrom: rates ? rates.effectiveFrom : "",
-    };
-  };
+  const fillFromProduct = (row: LineForm, product: Product): LineForm =>
+    fillLineFromProduct(row, product, company, priceAsOfDate());
 
   // Update a line cell; auto-fill from the catalog the moment a matching
   // part # is entered, and recompute derived numbers live.
@@ -916,6 +879,12 @@ export default function UploadPage() {
               to edit the existing PO — or use <span className="font-medium">New revision</span> there if
               the customer has re-issued it, then re-upload against the new revision number.
             </div>
+          </div>
+        )}
+        {lines.length > 0 && !form.poDate?.trim() && (
+          <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            No PO date was found on the file, so lines are priced from today&rsquo;s price list. Set
+            the PO date below and the lines reprice against the list that was in force then.
           </div>
         )}
         {(priceAlerts.length > 0 || totalAlert) && (

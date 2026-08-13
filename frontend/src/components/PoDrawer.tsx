@@ -15,7 +15,14 @@ import PipelineProgress from "./PipelineProgress";
 import PipelineStepActions from "./PipelineStepActions";
 import StageMilestoneEditor from "./StageMilestoneEditor";
 import { PO_SECTIONS as EDIT_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
-import { LINE_RECOMPUTE_KEYS, lineFormTotals, recomputeLineForm } from "../lineMath";
+import { LINE_RECOMPUTE_KEYS, lineFormTotals } from "../lineMath";
+import {
+  catalogMap,
+  computeLineWithCatalog,
+  fillLineFromProduct,
+  priceAsOfFor,
+  type CatalogProduct,
+} from "../lineCatalog";
 import {
   describeMismatch,
   linePriceMismatch,
@@ -195,6 +202,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const [lines, setLines] = useState<LineForm[]>([]);
   const [autoStatus, setAutoStatus] = useState(true);
   const [stockingLocations, setStockingLocations] = useState<{ name: string; email: string | null }[]>([]);
+  const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [tab, setTab] = useState<DrawerTab>("summary");
   const [editStageId, setEditStageId] = useState<string | null>(null);
 
@@ -205,8 +213,15 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   }, [po.id]);
 
   useEffect(() => {
-    api.getReference().then((ref) => setStockingLocations(ref.stockingLocations));
+    api.getReference().then((ref) => {
+      setStockingLocations(ref.stockingLocations);
+      setProducts(ref.products);
+    });
   }, []);
+
+  const productMap = useMemo(() => catalogMap(products), [products]);
+  // Lines are priced from the list that was live on this order's PO date, not today's.
+  const lineAsOf = priceAsOfFor(form.poDate ?? po.poDate);
 
   // Update a header field; auto-advance the status when a milestone field
   // changes (unless the user has taken manual control of the status).
@@ -320,9 +335,19 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     setLines((prev) => {
       const nextLines = prev.map((row, idx) => {
         if (idx !== i) return row;
-        let next = { ...row, [k]: v };
-        if ((LINE_RECOMPUTE_KEYS as readonly string[]).includes(k)) {
-          next = recomputeLineForm(next, k, master.sheetsPerSkid ?? 200);
+        let next: LineForm = { ...row, [k]: v };
+        const product = productMap.get((next.partNo ?? "").trim());
+        if (k === "partNo" && product) {
+          next = fillLineFromProduct(next, product, company, lineAsOf);
+        }
+        if (k === "partNo" || (LINE_RECOMPUTE_KEYS as readonly string[]).includes(k)) {
+          next = computeLineWithCatalog(next, {
+            product,
+            company,
+            asOf: lineAsOf,
+            sheetsPerSkid: master.sheetsPerSkid ?? 200,
+            changedKey: k === "partNo" ? (next.qtyMsf ? "qtyMsf" : "sheets") : k,
+          });
         }
         return next;
       });
@@ -529,6 +554,10 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 >
                   + Add line
                 </button>
+              </div>
+              <div className="text-[11px] text-slate-400 mb-2">
+                Enter a Part # — the catalog fills color, size and the rates from the price list in
+                force on {fmtDate(lineAsOf)} (this order&rsquo;s PO date).
               </div>
               <div className="overflow-x-auto">
                 <table className="text-xs border-collapse">

@@ -19,6 +19,16 @@ function pick(text: string, patterns: RegExp[]): string {
   return "";
 }
 
+/**
+ * The PO-number patterns allow letters (some POs carry a prefix), which lets a capture run
+ * into the next word — UFP prints "PO# : 24099911 Ordered : MILL". Keep the leading digits
+ * when a numeric PO number has words stuck to it.
+ */
+function trimPoNo(raw: string): string {
+  const m = raw.match(/^(\d{6,})[A-Za-z]/);
+  return m?.[1] ?? raw;
+}
+
 function pickDate(text: string, patterns: RegExp[]): string {
   const raw = pick(text, patterns);
   if (!raw) return "";
@@ -224,12 +234,14 @@ function guessFields(text: string, ref: Ref) {
   const stockingLocation = matchedLoc?.name ?? "";
 
   const out: Record<string, unknown> = {
-    poNo: pick(clean, [
-      /P\.?\s*O\.?\s*(?:Number|No|#)\s*[:#-]?\s*([A-Z0-9\-]{6,20})/i,
-      /Purchase\s+Order\s*(?:No|#)?\s*[:#-]?\s*([A-Z0-9\-]{6,20})/i,
-      /\b(5\d{7})\b/,
-      /\b(2\d{7})\b/,
-    ]),
+    poNo: trimPoNo(
+      pick(clean, [
+        /P\.?\s*O\.?\s*(?:Number|No|#)\s*[:#-]?\s*([A-Z0-9\-]{6,20})/i,
+        /Purchase\s+Order\s*(?:No|#)?\s*[:#-]?\s*([A-Z0-9\-]{6,20})/i,
+        /\b(5\d{7})\b/,
+        /\b(2\d{7})\b/,
+      ]),
+    ),
     rev: (() => {
       const m = clean.match(/(?:Rev(?:ision)?|Rev\.?)\s*[:#-]?\s*(\d+)/i);
       if (m?.[1]) return Number(m[1]) || 0;
