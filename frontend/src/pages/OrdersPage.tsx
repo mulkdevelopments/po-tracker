@@ -562,8 +562,8 @@ export default function OrdersPage() {
                 const payAlert = paymentRowAlert(p, master);
                 const rowTone = payAlert
                   ? payAlert.kind === "under"
-                    ? "bg-red-50 hover:bg-red-100/90"
-                    : "bg-amber-50 hover:bg-amber-100/90"
+                    ? "pay-under"
+                    : "pay-over"
                   : isManager && p.status === PI_PENDING_STATUS
                     ? "bg-amber-50/80 hover:bg-amber-100/80"
                     : isFinance && p.status === CI_PENDING_STATUS
@@ -572,7 +572,7 @@ export default function OrdersPage() {
                         ? "bg-red-50/80 hover:bg-red-100/80"
                         : isMaintainer && p.status === CI_REJECTED_STATUS
                           ? "bg-red-50/80 hover:bg-red-100/80"
-                          : "hover:bg-slate-50";
+                          : "";
                 return (
                   <tr
                     key={p.id}

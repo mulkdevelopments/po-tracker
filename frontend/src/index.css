@@ -965,6 +965,24 @@ button.pipeline-checklist-item {
   background: #f1f5f9;
 }
 
+/* Payment variance — paint every cell (tr background alone is covered by td rules above). */
+.excel-grid tbody tr.pay-under > td,
+.excel-grid tbody tr.pay-under > td.actions-col {
+  background: #fef2f2;
+}
+.excel-grid tbody tr.pay-under:hover > td,
+.excel-grid tbody tr.pay-under:hover > td.actions-col {
+  background: #fee2e2;
+}
+.excel-grid tbody tr.pay-over > td,
+.excel-grid tbody tr.pay-over > td.actions-col {
+  background: #fffbeb;
+}
+.excel-grid tbody tr.pay-over:hover > td,
+.excel-grid tbody tr.pay-over:hover > td.actions-col {
+  background: #fef3c7;
+}
+
 .excel-grid .actions-col {
   position: sticky;
   right: 0;
