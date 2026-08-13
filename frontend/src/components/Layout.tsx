@@ -35,7 +35,7 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
 
-  const navItems = NAV.filter((n) => canPage(n.page));
+  const navItems = NAV.filter((n) => canPage(n.page) && !(company === "UFP" && n.page === "cynergy-forms"));
   const currentPage = navItems.find((n) => location.pathname.startsWith(n.to));
   const moreNavItems = navItems.slice(4);
   const isMoreActive = moreNavItems.some((n) => location.pathname.startsWith(n.to));

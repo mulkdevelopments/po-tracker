@@ -17,10 +17,13 @@ export function fmtPrice(v: unknown, decimals: number): string {
   if (v == null || v === "") return "";
   const n = Number(v);
   if (isNaN(n)) return String(v);
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
+  return (
+    "$" +
+    n.toLocaleString("en-US", {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })
+  );
 }
 
 /** Length-in can be 90.5; mm/width are usually whole numbers. */

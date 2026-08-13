@@ -55,8 +55,8 @@ export async function generateCiExcel(po: CiPo): Promise<Buffer> {
     { header: "Color", key: "color", width: 16 },
     { header: "Sheets", key: "sheets", width: 10 },
     { header: "Qty m²", key: "qtyM2", width: 12 },
-    { header: "Unit $/m²", key: "unitM2", width: 12 },
-    { header: "Ext Inv $", key: "amount", width: 14 },
+    { header: "Unit $/m²", key: "unitM2", width: 12, style: { numFmt: '"$"#,##0.00' } },
+    { header: "Ext Inv $", key: "amount", width: 14, style: { numFmt: '"$"#,##0.00' } },
   ];
 
   const header = ws.getRow(1);
@@ -102,6 +102,7 @@ export async function generateCiExcel(po: CiPo): Promise<Buffer> {
   for (const [label, value] of summary) {
     const row = ws.addRow([label, value]);
     row.getCell(1).font = { bold: true };
+    if (typeof value === "number") row.getCell(2).numFmt = '"$"#,##0.00';
   }
   ws.getRow(summaryStart).getCell(1);
 

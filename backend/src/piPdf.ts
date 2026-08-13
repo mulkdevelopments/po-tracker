@@ -73,8 +73,12 @@ function fmtPiDate(iso?: string | null): string {
   return `${d.getDate()}/${MONTHS[d.getMonth()]}/${String(d.getFullYear()).slice(2)}`;
 }
 
-function fmtMoney(n: number): string {
+function fmtNum(n: number): string {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtMoney(n: number): string {
+  return "$" + fmtNum(n);
 }
 
 function titleCase(s: string): string {
@@ -417,7 +421,7 @@ export async function generatePiPdf(
       width: line.widthMm != null ? String(line.widthMm) : "",
       length: line.lengthMm != null ? String(line.lengthMm) : "",
       sheet: sheets ? String(sheets) : "",
-      m2: m2 ? fmtMoney(m2) : "",
+      m2: m2 ? fmtNum(m2) : "",
       rate: line.unitM2 != null ? fmtMoney(Number(line.unitM2)) : "",
       total: fmtMoney(total),
     });
@@ -427,7 +431,7 @@ export async function generatePiPdf(
   drawTableRow(layout, {
     desc: "Gross Total",
     sheet: String(totalSheets),
-    m2: fmtMoney(totalM2),
+    m2: fmtNum(totalM2),
     total: fmtMoney(grossTotal),
     bold: true,
   });

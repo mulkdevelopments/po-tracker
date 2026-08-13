@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { api, canEditPo, type CynergyFormSubmission } from "../api";
 import { useAuth } from "../AuthContext";
 import { useCompany } from "../CompanyContext";
@@ -26,7 +26,7 @@ function statusBadge(status: CynergyFormSubmission["status"]) {
 
 export default function CynergyFormsPage() {
   const { user } = useAuth();
-  const { setCompany } = useCompany();
+  const { company, setCompany } = useCompany();
   const canImport = user ? canEditPo(user) : false;
   const [filter, setFilter] = useState<Filter>("PENDING");
   const [rows, setRows] = useState<CynergyFormSubmission[]>([]);
@@ -167,6 +167,8 @@ export default function CynergyFormsPage() {
 
   const lines = Array.isArray(selected?.lines) ? selected!.lines : [];
   const colSpan = canImport ? 8 : 7;
+
+  if (company === "UFP") return <Navigate to="/dashboard" replace />;
 
   return (
     <div className="space-y-4">
