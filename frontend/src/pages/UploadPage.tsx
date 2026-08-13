@@ -15,13 +15,19 @@ import {
 import { extractSynergyPdfPages } from "../synergyPdf";
 import { pickProductPrice } from "../productPricing";
 import { fmtMoney, fmtNum, todayISO } from "../utils";
+import MoneyInput from "../components/MoneyInput";
+import {
+  LINE_RECOMPUTE_KEYS,
+  recomputeLineForm,
+  type LineForm as SharedLineForm,
+} from "../lineMath";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
   import.meta.url,
 ).toString();
 
-type LineForm = Record<string, string>;
+type LineForm = SharedLineForm;
 type Product = ReferenceData["products"][number];
 type DuplicatePo = { id: number; poNo: string; rev: number; status?: string | null };
 type SynergyBatchItem = {
@@ -37,11 +43,6 @@ type SynergyBatchItem = {
 const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "piValue", "grossInvoiceValue", "totalM2", "skids", "status"]);
 
 const toStr = (v: unknown) => (v == null ? "" : String(v));
-
-function skidsFromSheets(sheets: number | null, sheetsPerSkid: number): number | null {
-  if (sheets == null || sheetsPerSkid <= 0) return null;
-  return Math.ceil(sheets / sheetsPerSkid);
-}
 
 /** Catalog line value (drives PI value) — prefers stamped catalogExt from decode/compute */
 function lineCatalogValue(l: LineForm): number {
@@ -328,43 +329,23 @@ export default function UploadPage() {
 
   const priceAsOfDate = () => (form.poDate?.trim() || todayISO()).slice(0, 10);
 
-  // Recompute derived line numbers (m²/MSF/value) from sheets + product/dims.
-  // Catalog → catalogExt (PI). PDF extPo is preserved when present.
-  const computeLine = (row: LineForm): LineForm => {
+  // Recompute derived line numbers. Catalog → catalogExt (PI). PDF extPo is preserved when present.
+  const computeLine = (row: LineForm, changedKey = "sheets"): LineForm => {
     const product = row.partNo ? productMap.get(row.partNo) : undefined;
     const asOf = priceAsOfDate();
     const rates = product ? pickProductPrice(product, asOf) : null;
-    const wMm = product?.widthMm ?? (row.widthMm ? Number(row.widthMm) : null);
-    const lMm = product?.lengthMm ?? (row.lengthMm ? Number(row.lengthMm) : null);
-    const wIn = product?.widthIn ?? null;
-    const lIn = product?.lengthIn ?? null;
-    const sheets = row.sheets !== "" ? Number(row.sheets) : null;
-    const m2PerSheet = wMm && lMm ? (wMm * lMm) / 1_000_000 : null;
-    const sqftPerSheet = wIn && lIn ? (wIn * lIn) / 144 : null;
-    const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
-    const qtyMsf = sheets != null && sqftPerSheet != null ? (sheets * sqftPerSheet) / 1000 : null;
-    const pps = rates?.pricePerSheet ?? null;
-    const ppm2 = rates?.pricePerM2 ?? (row.unitM2 ? Number(row.unitM2) : null);
-    let catalogExt: number | null = null;
-    if (sheets != null && pps != null) catalogExt = sheets * pps;
-    else if (qtyM2 != null && ppm2 != null) catalogExt = qtyM2 * ppm2;
-    const fromPdf = row.fromPdf === "true" || row.fromPdf === "1";
-    const skids = skidsFromSheets(sheets, sheetsPerSkid);
-    const extInv = qtyM2 != null && ppm2 != null ? qtyM2 * ppm2 : catalogExt;
-    return {
+    const withDims: LineForm = {
       ...row,
-      qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : row.qtyM2,
-      qtyMsf: qtyMsf != null ? String(Math.round(qtyMsf * 1000) / 1000) : row.qtyMsf,
-      catalogExt: catalogExt != null ? String(Math.round(catalogExt * 100) / 100) : row.catalogExt ?? "",
-      extInv: extInv != null ? String(Math.round(extInv * 100) / 100) : row.extInv,
-      // Keep PDF line amount; only fill from catalog when no PDF amount
-      extPo:
-        fromPdf && row.extPo
-          ? row.extPo
-          : catalogExt != null
-            ? String(Math.round(catalogExt * 100) / 100)
-            : row.extPo,
-      skids: skids != null ? String(skids) : row.skids,
+      widthMm: row.widthMm || toStr(product?.widthMm),
+      lengthMm: row.lengthMm || toStr(product?.lengthMm),
+      unitM2: row.unitM2 || toStr(rates?.pricePerM2 ?? product?.pricePerM2),
+      ...(company === "SYNERGY"
+        ? { unitSheet: row.unitSheet || toStr(rates?.pricePerSheet ?? product?.pricePerSheet) }
+        : { unitMsf: row.unitMsf || toStr(rates?.pricePerMsq ?? product?.pricePerMsq) }),
+    };
+    const next = recomputeLineForm(withDims, changedKey, sheetsPerSkid, { preservePdfExtPo: true });
+    return {
+      ...next,
       priceAsOf: rates ? asOf : row.priceAsOf ?? "",
       priceEffectiveFrom: rates ? rates.effectiveFrom : row.priceEffectiveFrom ?? "",
     };
@@ -398,7 +379,9 @@ export default function UploadPage() {
           const product = productMap.get(v.trim());
           if (product) next = fillFromProduct(next, product);
         }
-        if (["partNo", "sheets", "widthMm", "lengthMm", "unitM2"].includes(k)) next = computeLine(next);
+        if (k === "partNo" || (LINE_RECOMPUTE_KEYS as readonly string[]).includes(k)) {
+          next = computeLine(next, k === "partNo" ? (next.qtyMsf ? "qtyMsf" : "sheets") : k);
+        }
         return next;
       }),
     );
@@ -408,12 +391,15 @@ export default function UploadPage() {
       prev.map((row, idx) => {
         if (idx !== i) return row;
         const product = productMap.get(row.partNo.trim());
-        return product ? computeLine(fillFromProduct(row, product)) : computeLine(row);
+        const filled = product ? fillFromProduct(row, product) : row;
+        return computeLine(filled, filled.qtyMsf ? "qtyMsf" : "sheets");
       }),
     );
 
-  const recompute = (i: number) =>
-    setLines((prev) => prev.map((row, idx) => (idx === i ? computeLine(row) : row)));
+  const recompute = (i: number, changedKey = "sheets") =>
+    setLines((prev) =>
+      prev.map((row, idx) => (idx === i ? computeLine(row, changedKey) : row)),
+    );
 
   const addLine = () => setLines((prev) => [...prev, { lineNo: String(prev.length + 1) }]);
   const removeLine = (i: number) => setLines((prev) => prev.filter((_, idx) => idx !== i));
@@ -972,12 +958,26 @@ export default function UploadPage() {
                   <tr key={i}>
                     {lineCols.map((c) => (
                       <td key={c.k as string} className="p-0.5">
-                        <input
-                          className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
-                          value={row[c.k as string] ?? ""}
-                          onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
-                          onBlur={() => (c.k === "partNo" ? applyProduct(i) : c.k === "sheets" ? recompute(i) : undefined)}
-                        />
+                        {c.money ? (
+                          <MoneyInput
+                            className={c.w || "w-24"}
+                            value={row[c.k as string] ?? ""}
+                            onChange={(v) => setLineVal(i, c.k as string, v)}
+                          />
+                        ) : (
+                          <input
+                            className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
+                            value={row[c.k as string] ?? ""}
+                            onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
+                            onBlur={() =>
+                              c.k === "partNo"
+                                ? applyProduct(i)
+                                : (LINE_RECOMPUTE_KEYS as readonly string[]).includes(c.k as string)
+                                  ? recompute(i, c.k as string)
+                                  : undefined
+                            }
+                          />
+                        )}
                       </td>
                     ))}
                     <td className="p-0.5">

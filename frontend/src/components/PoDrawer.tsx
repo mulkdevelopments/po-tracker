@@ -15,6 +15,7 @@ import PipelineProgress from "./PipelineProgress";
 import PipelineStepActions from "./PipelineStepActions";
 import StageMilestoneEditor from "./StageMilestoneEditor";
 import { PO_SECTIONS as EDIT_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
+import { LINE_RECOMPUTE_KEYS, lineFormTotals, recomputeLineForm } from "../lineMath";
 import {
   PI_PENDING_STATUS,
   PI_REJECTED_STATUS,
@@ -306,8 +307,30 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     setLines((prev) => [...prev, { lineNo: String(prev.length + 1) }]);
   const removeLine = (i: number) =>
     setLines((prev) => prev.filter((_, idx) => idx !== i));
-  const setLineVal = (i: number, k: string, v: string) =>
-    setLines((prev) => prev.map((row, idx) => (idx === i ? { ...row, [k]: v } : row)));
+  const setLineVal = (i: number, k: string, v: string) => {
+    setLines((prev) => {
+      const nextLines = prev.map((row, idx) => {
+        if (idx !== i) return row;
+        let next = { ...row, [k]: v };
+        if ((LINE_RECOMPUTE_KEYS as readonly string[]).includes(k)) {
+          next = recomputeLineForm(next, k, master.sheetsPerSkid ?? 200);
+        }
+        return next;
+      });
+      const totals = lineFormTotals(nextLines);
+      setForm((f) => ({
+        ...f,
+        ...(totals.grossInvoiceValue != null
+          ? { grossInvoiceValue: String(totals.grossInvoiceValue) }
+          : {}),
+        ...(totals.totalM2 != null ? { totalM2: String(totals.totalM2) } : {}),
+        ...(totals.skids != null ? { skids: String(totals.skids) } : {}),
+        // Only fill blank PO value from lines — keep an explicit operator/PDF amount.
+        ...(totals.poValue != null && !f.poValue ? { poValue: String(totals.poValue) } : {}),
+      }));
+      return nextLines;
+    });
+  };
 
   const stagePill = (s: string) => {
     const cls = STAGE_COLORS[s] || "bg-slate-100 text-slate-700";
