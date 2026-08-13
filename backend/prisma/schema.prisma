@@ -60,6 +60,8 @@ model PurchaseOrder {
   stockingLocation  String?
   portOfDest        String?
   poValue           Float?
+  /// Total printed on the customer PO — kept only to flag pricing that disagrees with our table
+  custPoTotal       Float?
   /// Gross invoice value (m² / Ext Inv based)
   grossInvoiceValue Float?
   /// Standard (default) or High
@@ -147,6 +149,10 @@ model PoLine {
   unitSheet  Float?
   extPo      Float?
   extInv     Float?
+  /// $/MSF printed on the customer PO (our price list stays authoritative — see unitMsf)
+  custUnitMsf Float?
+  /// Line amount printed on the customer PO
+  custExtPo   Float?
   notes           String?
   /// Date used to look up the price (usually PO date)
   priceAsOf       String?

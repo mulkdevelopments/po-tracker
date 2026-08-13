@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
-import { prisma, requireAuth, requirePage, requirePoEdit, requireStageAdvance, requireSuperAdmin, requireWrite } from "../middleware/auth.js";
+import { prisma, requireAuth, requirePage, requirePoEdit, requireStageAdvance, requireWrite } from "../middleware/auth.js";
 import {
   canAdvanceStage,
   canRejectPi,
@@ -116,6 +116,8 @@ const lineSchema = z.object({
   unitSheet: numField,
   extPo: numField,
   extInv: numField,
+  custUnitMsf: numField,
+  custExtPo: numField,
   notes: strField,
   priceAsOf: strField,
   priceEffectiveFrom: strField,
@@ -137,6 +139,7 @@ const poSchema = z.object({
   stockingLocation: strField,
   portOfDest: strField,
   poValue: numField,
+  custPoTotal: numField,
   grossInvoiceValue: numField,
   priority: z.enum(["Standard", "High"]).default("Standard").optional(),
   totalM2: numField,
@@ -658,7 +661,7 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
   res.json({ po });
 });
 
-router.delete("/:id", requireAuth, requirePage("orders"), requireSuperAdmin, async (req, res) => {
+router.delete("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (req, res) => {
   const company = getCompany(req);
   const id = Number(req.params.id);
   const existing = await prisma.purchaseOrder.findFirst({ where: { id, company } });

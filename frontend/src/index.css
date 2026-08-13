@@ -561,6 +561,21 @@ button.pipeline-checklist-item {
   color: #92400e;
 }
 
+/* Customer PO priced differently to our price list. */
+.po-drawer-pay-banner.price-off {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.tbl > tbody > tr.price-off > td {
+  background: #fef2f2;
+}
+
+.tbl > tbody > tr.price-off:hover > td {
+  background: #fee2e2;
+}
+
 .po-drawer-section-title {
   font-size: 13px;
   font-weight: 600;

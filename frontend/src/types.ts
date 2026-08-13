@@ -86,6 +86,10 @@ export interface PoLine {
   unitSheet?: number | null;
   extPo?: number | null;
   extInv?: number | null;
+  /** $/MSF printed on the customer PO — compared against unitMsf, never used to price */
+  custUnitMsf?: number | null;
+  /** Line amount printed on the customer PO */
+  custExtPo?: number | null;
   notes?: string | null;
   /** Date used to look up catalog price (usually PO date) */
   priceAsOf?: string | null;
@@ -120,6 +124,8 @@ export interface PurchaseOrder {
   stockingLocation?: string | null;
   portOfDest?: string | null;
   poValue?: number | null;
+  /** Total printed on the customer PO — comparison only */
+  custPoTotal?: number | null;
   /** Gross invoice value based on m² / Ext Inv */
   grossInvoiceValue?: number | null;
   /** Standard (default) or High */

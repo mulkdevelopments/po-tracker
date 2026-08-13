@@ -25,7 +25,8 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "stockingLocation", label: "Stocking Location" },
       { k: "portOfDest", label: "Port of Destination" },
       { k: "priority", label: "Priority", type: "select", options: ["Standard", "High"] },
-      { k: "poValue", label: "PO Value $ (from PDF)", type: "number" },
+      { k: "poValue", label: "PO Value $ (our price list)", type: "number" },
+      { k: "custPoTotal", label: "PO Value $ (as printed on PO)", type: "number" },
       { k: "piValue", label: "PI Value $ (calculated)", type: "number" },
       { k: "grossInvoiceValue", label: "Gross Invoice Value $ (m²)", type: "number" },
       { k: "totalM2", label: "Total M2", type: "number" },
@@ -140,6 +141,7 @@ export interface LineCol {
   k: keyof PoLine;
   label: string;
   w?: string;
+  money?: boolean;
 }
 
 export const LINE_COLS: LineCol[] = [
@@ -154,11 +156,11 @@ export const LINE_COLS: LineCol[] = [
   { k: "qtyM2", label: "Qty (M2)" },
   { k: "sheets", label: "Sheets" },
   { k: "skids", label: "Skids" },
-  { k: "unitMsf", label: "Unit (MSF)" },
-  { k: "unitSheet", label: "Unit (Sheet)" },
-  { k: "unitM2", label: "Unit (M2)" },
-  { k: "extPo", label: "Ext (PO)" },
-  { k: "extInv", label: "Ext (Inv)" },
+  { k: "unitMsf", label: "Unit $ (MSF)", money: true },
+  { k: "unitSheet", label: "Unit $ (Sheet)", money: true },
+  { k: "unitM2", label: "Unit $ (M2)", money: true },
+  { k: "extPo", label: "Ext $ (PO)", money: true },
+  { k: "extInv", label: "Ext $ (Inv)", money: true },
   { k: "notes", label: "Notes" },
 ];
 

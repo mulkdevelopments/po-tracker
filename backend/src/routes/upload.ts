@@ -103,8 +103,10 @@ function lineFromProduct(
   let catalogExt: number | null = null;
   if (sheets != null && pricePerSheet != null) catalogExt = sheets * pricePerSheet;
   else if (qtyM2 != null && pricePerM2 != null) catalogExt = qtyM2 * pricePerM2;
-  // PO line value — prefer PDF amount (sq ft) when present
-  const extPo = pdf?.amount != null ? pdf.amount : catalogExt;
+  // PO line value — our price list on its sq-ft basis. The rate and amount printed on the
+  // customer PO are kept separately (custUnitMsf / custExtPo) purely to flag disagreements.
+  const extPo =
+    qtyMsf != null && pricePerMsq != null ? qtyMsf * pricePerMsq : catalogExt;
   // Gross invoice line — m² × $/m² (independent of PDF sq-ft amount)
   const extInv = qtyM2 != null && pricePerM2 != null ? qtyM2 * pricePerM2 : catalogExt;
   const sizeLabel = [p.thickness, p.widthIn ? `${p.widthIn}"` : "", p.lengthIn ? `x ${p.lengthIn}"` : "", p.construction]
@@ -122,15 +124,16 @@ function lineFromProduct(
     qtyM2,
     sheets,
     skids: skidsOverride ?? skidsFromSheets(sheets, sheetsPerSkid),
-    unitMsf: pdf?.unitMsf ?? pricePerMsq,
+    unitMsf: pricePerMsq,
     unitM2: pricePerM2,
     extPo,
     extInv,
+    custUnitMsf: pdf?.unitMsf ?? null,
+    custExtPo: pdf?.amount ?? null,
     catalogExt,
     priceAsOf: rates ? asOf : null,
     priceEffectiveFrom: rates?.effectiveFrom ?? null,
     matched: true,
-    fromPdf: pdf?.amount != null,
   };
 }
 
@@ -179,7 +182,8 @@ function summarizeLines(lines: Record<string, unknown>[]) {
     if (Number.isFinite(cat) && cat) return s + cat;
     return s + (Number(l.extPo) || 0);
   }, 0);
-  const pdfLineSum = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const custLineSum = lines.reduce((s, l) => s + (Number(l.custExtPo) || 0), 0);
   const grossInvoiceValue = lines.reduce((s, l) => {
     const inv = Number(l.extInv);
     if (Number.isFinite(inv) && inv) return s + inv;
@@ -193,8 +197,10 @@ function summarizeLines(lines: Record<string, unknown>[]) {
   return {
     /** Catalog / calculated — drives PI value */
     piValue: catalogValue || null,
-    /** Sum of line extPo (PDF amounts when present) */
-    pdfLineSum: pdfLineSum || null,
+    /** Sum of line extPo, priced from our table */
+    poValue: poValue || null,
+    /** Sum of the amounts printed on the customer PO */
+    custLineSum: custLineSum || null,
     grossInvoiceValue: grossInvoiceValue || null,
     totalM2: totalM2 || null,
     skids: skids || null,
@@ -291,8 +297,9 @@ function guessFields(text: string, ref: Ref) {
   if (poNo) out.concat = `${poNo}-${rev}`;
   const sums = summarizeLines(lines);
   const pdfTotal = parsePdfPoTotal(clean);
-  // PO value = PDF Total (preferred), else sum of PDF line amounts
-  out.poValue = pdfTotal ?? sums.pdfLineSum;
+  // PO value comes from our price list; the customer's own total is kept for comparison.
+  out.poValue = sums.poValue;
+  out.custPoTotal = pdfTotal ?? sums.custLineSum;
   // PI value = catalog calculated rates
   out.piValue = sums.piValue;
   out.grossInvoiceValue = sums.grossInvoiceValue;

@@ -21,6 +21,12 @@ import {
   recomputeLineForm,
   type LineForm as SharedLineForm,
 } from "../lineMath";
+import {
+  describeMismatch,
+  linePriceMismatch,
+  linePriceMismatches,
+  poTotalMismatch,
+} from "../priceCompare";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -39,7 +45,7 @@ type SynergyBatchItem = {
 };
 
 // Header fields computed automatically on upload — shown read-only to cut manual entry.
-// poValue comes from the PDF Total (set on decode, not overwritten by catalog).
+// poValue is priced from our table; the customer's own total is kept in custPoTotal for comparison.
 const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "piValue", "grossInvoiceValue", "totalM2", "skids", "status"]);
 
 const toStr = (v: unknown) => (v == null ? "" : String(v));
@@ -53,7 +59,8 @@ function lineCatalogValue(l: LineForm): number {
 
 function summarizeLines(lines: LineForm[]) {
   const catalogValue = lines.reduce((s, l) => s + lineCatalogValue(l), 0);
-  const pdfLineSum = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const poValue = lines.reduce((s, l) => s + (Number(l.extPo) || 0), 0);
+  const custLineSum = lines.reduce((s, l) => s + (Number(l.custExtPo) || 0), 0);
   const grossInvoiceValue = lines.reduce((s, l) => {
     const inv = Number(l.extInv);
     if (Number.isFinite(inv) && inv) return s + inv;
@@ -64,7 +71,15 @@ function summarizeLines(lines: LineForm[]) {
   }, 0);
   const totalM2 = lines.reduce((s, l) => s + (Number(l.qtyM2) || 0), 0);
   const skids = lines.reduce((s, l) => s + (Number(l.skids) || 0), 0);
-  return { catalogValue, pdfLineSum, piValue: catalogValue, grossInvoiceValue, totalM2, skids };
+  return {
+    catalogValue,
+    poValue,
+    custLineSum,
+    piValue: catalogValue,
+    grossInvoiceValue,
+    totalM2,
+    skids,
+  };
 }
 
 function blankForm(): Record<string, string> {
@@ -82,7 +97,9 @@ function lineToForm(l: Record<string, unknown>): LineForm {
   const row: LineForm = {};
   for (const c of LINE_COLS) row[c.k as string] = toStr(l[c.k as string]);
   if (l.catalogExt != null) row.catalogExt = toStr(l.catalogExt);
-  if (l.fromPdf != null) row.fromPdf = l.fromPdf === true || l.fromPdf === "true" ? "true" : "";
+  // Not editable columns — carried through so price mismatches can be flagged.
+  row.custUnitMsf = toStr(l.custUnitMsf);
+  row.custExtPo = toStr(l.custExtPo);
   return row;
 }
 
@@ -90,7 +107,7 @@ function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: b
   const gLines = (g.lines as Record<string, unknown>[]) || [];
   const lines = gLines.map(lineToForm);
   const totals = summarizeLines(lines);
-  const pdfPo = g.poValue != null ? Number(g.poValue) : NaN;
+  const custTotal = g.custPoTotal != null ? Number(g.custPoTotal) : NaN;
   return {
     siNo: String(siNo),
     poNo: toStr(g.poNo),
@@ -99,10 +116,11 @@ function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: b
     stockingLocation: toStr(g.stockingLocation),
     portOfDest: toStr(g.portOfDest),
     concat: toStr(g.concat) || (toStr(g.poNo) ? `${toStr(g.poNo)}-${toStr(g.rev ?? 0)}` : ""),
-    poValue: Number.isFinite(pdfPo)
-      ? String(Math.round(pdfPo * 100) / 100)
-      : totals.pdfLineSum
-        ? String(Math.round(totals.pdfLineSum * 100) / 100)
+    poValue: totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
+    custPoTotal: Number.isFinite(custTotal)
+      ? String(Math.round(custTotal * 100) / 100)
+      : totals.custLineSum
+        ? String(Math.round(totals.custLineSum * 100) / 100)
         : "",
     piValue: totals.piValue ? String(Math.round(totals.piValue * 100) / 100) : "",
     grossInvoiceValue:
@@ -230,6 +248,11 @@ export default function UploadPage() {
 
   const totals = useMemo(() => summarizeLines(lines), [lines]);
   const lineCols = useMemo(() => lineColsFor(company), [company]);
+  const priceAlerts = useMemo(() => linePriceMismatches(lines), [lines]);
+  const totalAlert = useMemo(
+    () => poTotalMismatch({ poValue: form.poValue, custPoTotal: form.custPoTotal }),
+    [form.poValue, form.custPoTotal],
+  );
 
   // UFP quotes per MSF, Cynergy per sheet — fill only the rate that applies.
   const unitRateFields = (product: Product, rates: ReturnType<typeof pickProductPrice>) =>
@@ -237,13 +260,14 @@ export default function UploadPage() {
       ? { unitMsf: "", unitSheet: toStr(rates?.pricePerSheet ?? product.pricePerSheet) }
       : { unitMsf: toStr(rates?.pricePerMsq ?? product.pricePerMsq), unitSheet: "" };
 
-  // Keep derived header fields in sync. PO value stays from PDF (not catalog).
+  // Keep derived header fields in sync — including PO value, which follows our priced lines.
   useEffect(() => {
     const rev = Math.round(Number(form.rev || 0)) || 0;
     const poNo = form.poNo.trim();
     setForm((f) => ({
       ...f,
       concat: poNo ? `${poNo}-${rev}` : "",
+      poValue: totals.poValue ? String(Math.round(totals.poValue * 100) / 100) : "",
       piValue: totals.piValue ? String(Math.round(totals.piValue * 100) / 100) : "",
       grossInvoiceValue: totals.grossInvoiceValue
         ? String(Math.round(totals.grossInvoiceValue * 100) / 100)
@@ -253,7 +277,15 @@ export default function UploadPage() {
       status: "PO Received",
       priority: f.priority || "Standard",
     }));
-  }, [form.poNo, form.rev, totals.piValue, totals.grossInvoiceValue, totals.totalM2, totals.skids]);
+  }, [
+    form.poNo,
+    form.rev,
+    totals.poValue,
+    totals.piValue,
+    totals.grossInvoiceValue,
+    totals.totalM2,
+    totals.skids,
+  ]);
 
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {
@@ -264,43 +296,18 @@ export default function UploadPage() {
     if (k === "poDate") {
       setForm((f) => ({ ...f, poDate: v }));
       // Re-apply catalog rates for the new PO date (does not change saved POs)
+      const asOf = (v.trim() || todayISO()).slice(0, 10);
       setLines((prev) =>
         prev.map((row) => {
           const product = row.partNo ? productMap.get(row.partNo.trim()) : undefined;
           if (!product) return row;
-          const asOf = (v.trim() || todayISO()).slice(0, 10);
           const rates = pickProductPrice(product, asOf);
-          const filled: LineForm = {
+          const repriced: LineForm = {
             ...row,
             ...unitRateFields(product, rates),
             unitM2: toStr(rates?.pricePerM2 ?? product.pricePerM2),
-            priceAsOf: rates ? asOf : "",
-            priceEffectiveFrom: rates ? rates.effectiveFrom : "",
           };
-          const wMm = product.widthMm ?? (filled.widthMm ? Number(filled.widthMm) : null);
-          const lMm = product.lengthMm ?? (filled.lengthMm ? Number(filled.lengthMm) : null);
-          const sheets = filled.sheets !== "" ? Number(filled.sheets) : null;
-          const m2PerSheet = wMm && lMm ? (wMm * lMm) / 1_000_000 : null;
-          const qtyM2 = sheets != null && m2PerSheet != null ? sheets * m2PerSheet : null;
-          const pps = rates?.pricePerSheet ?? null;
-          const ppm2 = rates?.pricePerM2 ?? null;
-          let catalogExt: number | null = null;
-          if (sheets != null && pps != null) catalogExt = sheets * pps;
-          else if (qtyM2 != null && ppm2 != null) catalogExt = qtyM2 * ppm2;
-          const fromPdf = row.fromPdf === "true" || row.fromPdf === "1";
-          const extInv = qtyM2 != null && ppm2 != null ? qtyM2 * ppm2 : catalogExt;
-          return {
-            ...filled,
-            qtyM2: qtyM2 != null ? String(Math.round(qtyM2 * 1000) / 1000) : filled.qtyM2,
-            catalogExt: catalogExt != null ? String(Math.round(catalogExt * 100) / 100) : filled.catalogExt,
-            extInv: extInv != null ? String(Math.round(extInv * 100) / 100) : filled.extInv,
-            extPo:
-              fromPdf && filled.extPo
-                ? filled.extPo
-                : catalogExt != null
-                  ? String(Math.round(catalogExt * 100) / 100)
-                  : filled.extPo,
-          };
+          return computeLine(repriced, "sheets", asOf);
         }),
       );
       return;
@@ -329,10 +336,10 @@ export default function UploadPage() {
 
   const priceAsOfDate = () => (form.poDate?.trim() || todayISO()).slice(0, 10);
 
-  // Recompute derived line numbers. Catalog → catalogExt (PI). PDF extPo is preserved when present.
-  const computeLine = (row: LineForm, changedKey = "sheets"): LineForm => {
+  // Recompute derived line numbers. Rates always come from our price list, never from the PO.
+  const computeLine = (row: LineForm, changedKey = "sheets", asOfOverride?: string): LineForm => {
     const product = row.partNo ? productMap.get(row.partNo) : undefined;
-    const asOf = priceAsOfDate();
+    const asOf = asOfOverride ?? priceAsOfDate();
     const rates = product ? pickProductPrice(product, asOf) : null;
     const withDims: LineForm = {
       ...row,
@@ -343,7 +350,7 @@ export default function UploadPage() {
         ? { unitSheet: row.unitSheet || toStr(rates?.pricePerSheet ?? product?.pricePerSheet) }
         : { unitMsf: row.unitMsf || toStr(rates?.pricePerMsq ?? product?.pricePerMsq) }),
     };
-    const next = recomputeLineForm(withDims, changedKey, sheetsPerSkid, { preservePdfExtPo: true });
+    const next = recomputeLineForm(withDims, changedKey, sheetsPerSkid);
     return {
       ...next,
       priceAsOf: rates ? asOf : row.priceAsOf ?? "",
@@ -408,7 +415,7 @@ export default function UploadPage() {
     const gLines = (g.lines as Record<string, unknown>[]) || [];
     const formLines = gLines.map(lineToForm);
     const computed = summarizeLines(formLines);
-    const pdfPo = g.poValue != null ? Number(g.poValue) : NaN;
+    const custTotal = g.custPoTotal != null ? Number(g.custPoTotal) : NaN;
     setForm((f) => ({
       ...f,
       poNo: toStr(g.poNo) || f.poNo,
@@ -417,11 +424,14 @@ export default function UploadPage() {
       stockingLocation: toStr(g.stockingLocation) || f.stockingLocation,
       portOfDest: toStr(g.portOfDest) || f.portOfDest,
       concat: toStr(g.concat) || f.concat,
-      poValue: Number.isFinite(pdfPo)
-        ? String(Math.round(pdfPo * 100) / 100)
-        : computed.pdfLineSum
-          ? String(Math.round(computed.pdfLineSum * 100) / 100)
-          : f.poValue,
+      poValue: computed.poValue
+        ? String(Math.round(computed.poValue * 100) / 100)
+        : f.poValue,
+      custPoTotal: Number.isFinite(custTotal)
+        ? String(Math.round(custTotal * 100) / 100)
+        : computed.custLineSum
+          ? String(Math.round(computed.custLineSum * 100) / 100)
+          : f.custPoTotal ?? "",
       piValue: g.piValue != null
         ? toStr(g.piValue)
         : computed.piValue
@@ -629,7 +639,7 @@ export default function UploadPage() {
     try {
       if (activeBatchPage != null) setSynergyBatch(mergeEditorIntoBatch(synergyBatch));
       const payload: Record<string, unknown> = { ...form, active };
-      if (!form.poValue) payload.poValue = totals.pdfLineSum || null;
+      if (!form.poValue) payload.poValue = totals.poValue || null;
       if (!form.piValue) payload.piValue = totals.piValue || null;
       if (!form.grossInvoiceValue) payload.grossInvoiceValue = totals.grossInvoiceValue || null;
       if (!form.priority) payload.priority = "Standard";
@@ -908,6 +918,27 @@ export default function UploadPage() {
             </div>
           </div>
         )}
+        {(priceAlerts.length > 0 || totalAlert) && (
+          <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+            <div className="font-medium">
+              The customer PO is priced differently to our price list.
+            </div>
+            <div className="mt-1 text-xs text-red-800">
+              Lines are priced from our table — the figures below are what the PO asked for.
+            </div>
+            <ul className="mt-2 space-y-0.5 text-xs">
+              {totalAlert && (
+                <li>
+                  PO total {fmtMoney(totalAlert.poTotal)} vs ours {fmtMoney(totalAlert.ourTotal)} ·
+                  difference {fmtMoney(totalAlert.variance)}
+                </li>
+              )}
+              {priceAlerts.map((m) => (
+                <li key={m.lineNo ?? m.partNo}>{describeMismatch(m)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 p-5">
@@ -916,7 +947,7 @@ export default function UploadPage() {
           <div className="ml-auto text-xs text-slate-500 text-right">
             <div>SI #{form.siNo || "—"}{form.poNo ? ` · ${form.poNo}` : ""}</div>
             <div>
-              {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · PO {fmtMoney(Number(form.poValue) || totals.pdfLineSum)} · PI{" "}
+              {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · PO {fmtMoney(Number(form.poValue) || totals.poValue)} · PI{" "}
               {fmtMoney(totals.piValue)} · Gross {fmtMoney(totals.grossInvoiceValue)} · {totals.skids || 0} skids
             </div>
           </div>
@@ -954,37 +985,46 @@ export default function UploadPage() {
                 </tr>
               </thead>
               <tbody>
-                {lines.map((row, i) => (
-                  <tr key={i}>
-                    {lineCols.map((c) => (
-                      <td key={c.k as string} className="p-0.5">
-                        {c.money ? (
-                          <MoneyInput
-                            className={c.w || "w-24"}
-                            value={row[c.k as string] ?? ""}
-                            onChange={(v) => setLineVal(i, c.k as string, v)}
-                          />
-                        ) : (
-                          <input
-                            className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
-                            value={row[c.k as string] ?? ""}
-                            onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
-                            onBlur={() =>
-                              c.k === "partNo"
-                                ? applyProduct(i)
-                                : (LINE_RECOMPUTE_KEYS as readonly string[]).includes(c.k as string)
-                                  ? recompute(i, c.k as string)
-                                  : undefined
-                            }
-                          />
-                        )}
+                {lines.map((row, i) => {
+                  const mismatch = linePriceMismatch(row);
+                  return (
+                    <tr
+                      key={i}
+                      className={mismatch ? "bg-red-50" : undefined}
+                      title={mismatch ? describeMismatch(mismatch) : undefined}
+                    >
+                      {lineCols.map((c) => (
+                        <td key={c.k as string} className="p-0.5">
+                          {c.money ? (
+                            <MoneyInput
+                              className={c.w || "w-24"}
+                              value={row[c.k as string] ?? ""}
+                              onChange={(v) => setLineVal(i, c.k as string, v)}
+                            />
+                          ) : (
+                            <input
+                              className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
+                              value={row[c.k as string] ?? ""}
+                              onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
+                              onBlur={() =>
+                                c.k === "partNo"
+                                  ? applyProduct(i)
+                                  : (LINE_RECOMPUTE_KEYS as readonly string[]).includes(
+                                        c.k as string,
+                                      )
+                                    ? recompute(i, c.k as string)
+                                    : undefined
+                              }
+                            />
+                          )}
+                        </td>
+                      ))}
+                      <td className="p-0.5">
+                        <button type="button" onClick={() => removeLine(i)} className="text-red-500 hover:text-red-700 px-1" title="Remove line">×</button>
                       </td>
-                    ))}
-                    <td className="p-0.5">
-                      <button type="button" onClick={() => removeLine(i)} className="text-red-500 hover:text-red-700 px-1" title="Remove line">×</button>
-                    </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
                 {lines.length === 0 && (
                   <tr><td colSpan={lineCols.length + 1} className="text-center text-slate-400 py-4">No lines yet — upload a PO or click “+ Add line”.</td></tr>
                 )}

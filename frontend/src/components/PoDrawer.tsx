@@ -17,6 +17,12 @@ import StageMilestoneEditor from "./StageMilestoneEditor";
 import { PO_SECTIONS as EDIT_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
 import { LINE_RECOMPUTE_KEYS, lineFormTotals, recomputeLineForm } from "../lineMath";
 import {
+  describeMismatch,
+  linePriceMismatch,
+  linePriceMismatches,
+  poTotalMismatch,
+} from "../priceCompare";
+import {
   PI_PENDING_STATUS,
   PI_REJECTED_STATUS,
   CI_PENDING_STATUS,
@@ -266,6 +272,9 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
         const row: LineForm = {};
         if (l.id != null) row.id = String(l.id);
         for (const c of LINE_COLS) row[c.k as string] = toStr(l[c.k]);
+        // Not editable — carried through the edit so the price comparison survives a save.
+        row.custUnitMsf = toStr(l.custUnitMsf);
+        row.custExtPo = toStr(l.custExtPo);
         return row;
       }),
     );
@@ -325,8 +334,8 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
           : {}),
         ...(totals.totalM2 != null ? { totalM2: String(totals.totalM2) } : {}),
         ...(totals.skids != null ? { skids: String(totals.skids) } : {}),
-        // Only fill blank PO value from lines — keep an explicit operator/PDF amount.
-        ...(totals.poValue != null && !f.poValue ? { poValue: String(totals.poValue) } : {}),
+        // PO value follows the lines, which are priced from our table.
+        ...(totals.poValue != null ? { poValue: String(totals.poValue) } : {}),
       }));
       return nextLines;
     });
@@ -345,7 +354,12 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const editLineCols = lineColsFor(company);
   const lineExtPoTotal = sumLineExtPo(po.lines);
   const lineExtInvTotal = sumLineExtInv(po.lines);
-  const trailingLineCols = (showActuals ? 3 : 0) + (showLineNotes ? 1 : 0);
+  // Lines are priced from our table; what the customer PO asked for is shown for comparison.
+  const priceAlerts = linePriceMismatches(po.lines);
+  const totalAlert = poTotalMismatch(po);
+  const showCustPrices = po.lines.some((l) => l.custExtPo != null || l.custUnitMsf != null);
+  const trailingLineCols =
+    (showCustPrices ? 1 : 0) + (showActuals ? 3 : 0) + (showLineNotes ? 1 : 0);
 
   return (
     <>
@@ -604,6 +618,21 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                     )}
                   </div>
                 )}
+                {(priceAlerts.length > 0 || totalAlert) && (
+                  <div className="po-drawer-pay-banner price-off">
+                    <div>Customer PO is priced differently to our price list.</div>
+                    {totalAlert && (
+                      <div>
+                        PO total {fmtMoney(totalAlert.poTotal)} vs ours{" "}
+                        {fmtMoney(totalAlert.ourTotal)} · difference{" "}
+                        {fmtMoney(totalAlert.variance)}
+                      </div>
+                    )}
+                    {priceAlerts.map((m) => (
+                      <div key={m.lineNo ?? m.partNo}>{describeMismatch(m)}</div>
+                    ))}
+                  </div>
+                )}
                 <button
                   type="button"
                   className="po-drawer-link-btn"
@@ -624,6 +653,16 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       }
                     />
                     <Field label="PO value (sq ft)" val={fmtMoney(po.poValue)} />
+                    {po.custPoTotal != null && (
+                      <Field
+                        label="PO asked (as printed)"
+                        val={
+                          <span className={totalAlert ? "text-red-700 font-semibold" : undefined}>
+                            {fmtMoney(po.custPoTotal)}
+                          </span>
+                        }
+                      />
+                    )}
                     <Field label="Gross invoice (m²)" val={fmtMoney(resolveGrossInvoiceValue(po))} />
                     <Field label="Total M²" val={fmtNum(po.totalM2, 2)} />
                     <Field label="Skids" val={po.skids} />
@@ -655,6 +694,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                           <th className="text-right">Unit m²</th>
                           <th className="text-right">Ext PO $</th>
                           <th className="text-right">Ext Inv $</th>
+                          {showCustPrices && <th className="text-right">PO asked $</th>}
                           {showActuals && (
                             <>
                               <th className="text-right">Actual sheets</th>
@@ -674,8 +714,9 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                               : l.qtyM2 != null && l.unitM2 != null
                                 ? Number(l.qtyM2) * Number(l.unitM2)
                                 : null;
+                          const mismatch = linePriceMismatch(l);
                           return (
-                            <tr key={l.lineNo}>
+                            <tr key={l.lineNo} className={mismatch ? "price-off" : undefined}>
                               <td>{l.lineNo}</td>
                               <td className="font-mono truncate" title={l.partNo ?? undefined}>{l.partNo}</td>
                               <td className="truncate" title={l.size ?? undefined}>{l.size}</td>
@@ -688,6 +729,18 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                               <td className="text-right">{fmtMoney(l.unitM2)}</td>
                               <td className="text-right">{fmtMoney(l.extPo)}</td>
                               <td className="text-right">{fmtMoney(lineInv)}</td>
+                              {showCustPrices && (
+                                <td
+                                  className={`text-right ${mismatch ? "text-red-700 font-semibold" : "text-slate-500"}`}
+                                  title={mismatch ? describeMismatch(mismatch) : undefined}
+                                >
+                                  {l.custExtPo != null ? (
+                                    fmtMoney(l.custExtPo)
+                                  ) : (
+                                    <span className="text-slate-300">—</span>
+                                  )}
+                                </td>
+                              )}
                               {showActuals && (
                                 <>
                                   <td className="text-right">
