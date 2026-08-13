@@ -10,21 +10,22 @@ export interface PaymentFlag {
   variance: number;
 }
 
-/** Default variance allowed before a payment is flagged; overridable in Master Data (#3). */
-export const DEFAULT_PAYMENT_TOLERANCE: PaymentTolerance = { pct: 0.01, abs: 1 };
+/** Default variance ($) allowed before a payment is flagged; overridable in Master Data (#3). */
+export const DEFAULT_PAYMENT_TOLERANCE_ABS = 1;
 
-export type PaymentTolerance = { pct: number; abs: number };
+export type PaymentTolerance = { abs: number };
 
-function resolveTolerance(t?: Partial<PaymentTolerance> | null): PaymentTolerance {
+function resolveTolerance(t?: Partial<PaymentTolerance> | number | null): PaymentTolerance {
+  if (typeof t === "number") {
+    return { abs: Number.isFinite(t) ? t : DEFAULT_PAYMENT_TOLERANCE_ABS };
+  }
   return {
-    pct: Number.isFinite(Number(t?.pct)) ? Number(t?.pct) : DEFAULT_PAYMENT_TOLERANCE.pct,
-    abs: Number.isFinite(Number(t?.abs)) ? Number(t?.abs) : DEFAULT_PAYMENT_TOLERANCE.abs,
+    abs: Number.isFinite(Number(t?.abs)) ? Number(t?.abs) : DEFAULT_PAYMENT_TOLERANCE_ABS,
   };
 }
 
 function nearlyEqual(a: number, b: number, tol: PaymentTolerance): boolean {
-  const diff = Math.abs(a - b);
-  return diff <= Math.max(tol.abs, Math.abs(b) * tol.pct);
+  return Math.abs(a - b) <= tol.abs;
 }
 
 function flagPayment(
@@ -91,14 +92,11 @@ export function balancePaymentFlag(
   );
 }
 
-/** Read the configured tolerance off master data / the reference config payload. */
+/** Read the configured dollar tolerance off master data / the reference config payload. */
 export function paymentTolerance(
-  source?: { paymentTolerancePct?: number | null; paymentToleranceAbs?: number | null } | null,
+  source?: { paymentToleranceAbs?: number | null } | null,
 ): PaymentTolerance {
-  return resolveTolerance({
-    pct: source?.paymentTolerancePct ?? undefined,
-    abs: source?.paymentToleranceAbs ?? undefined,
-  });
+  return resolveTolerance({ abs: source?.paymentToleranceAbs ?? undefined });
 }
 
 export function sumLineExtInv(lines: { extInv?: number | null; qtyM2?: number | null; unitM2?: number | null }[]): number {

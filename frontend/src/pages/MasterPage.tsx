@@ -357,7 +357,6 @@ function ConfigCard({ ref, canEdit, onSaved }: { ref: ReferenceData; canEdit: bo
     containerMaxM2: cfg?.containerMaxM2 ?? 8600,
     leadTimeStandard: cfg?.leadTimeStandard ?? 45,
     leadTimeNonStandard: cfg?.leadTimeNonStandard ?? 90,
-    paymentTolerancePct: Math.round((cfg?.paymentTolerancePct ?? 0.01) * 10000) / 100,
     paymentToleranceAbs: cfg?.paymentToleranceAbs ?? 1,
   });
   const [busy, setBusy] = useState(false);
@@ -371,7 +370,6 @@ function ConfigCard({ ref, canEdit, onSaved }: { ref: ReferenceData; canEdit: bo
         containerMaxM2: draft.containerMaxM2,
         leadTimeStandard: draft.leadTimeStandard,
         leadTimeNonStandard: draft.leadTimeNonStandard,
-        paymentTolerancePct: draft.paymentTolerancePct / 100,
         paymentToleranceAbs: draft.paymentToleranceAbs,
       });
       await onSaved();
@@ -388,15 +386,14 @@ function ConfigCard({ ref, canEdit, onSaved }: { ref: ReferenceData; canEdit: bo
     { k: "containerMaxM2", label: "Container Max", suffix: "m²" },
     { k: "leadTimeStandard", label: "Lead Time — Standard", suffix: "days" },
     { k: "leadTimeNonStandard", label: "Lead Time — Non-Standard", suffix: "days" },
-    { k: "paymentTolerancePct", label: "Payment Tolerance", suffix: "%" },
-    { k: "paymentToleranceAbs", label: "Payment Tolerance — Minimum", suffix: "$" },
+    { k: "paymentToleranceAbs", label: "Payment Tolerance", suffix: "$" },
   ];
 
   return (
     <div className="grid grid-cols-1 gap-2 text-sm">
       <p className="text-xs text-slate-500">
-        Payments within the tolerance (whichever of the two is larger) count as on target;
-        anything outside it is flagged as an under- or overpayment.
+        Payments within the dollar tolerance count as on target; anything outside it is flagged as
+        an under- or overpayment.
       </p>
       {fields.map((f) => (
         <div key={f.k} className="flex items-center justify-between gap-2">
