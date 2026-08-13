@@ -4,15 +4,15 @@
  * Purchase orders quote quantity in MSF (thousand square feet), while production and
  * invoicing work in sheets and m². Request #24 fixes the chain:
  *
- *   MSF → # sheets (snapped to the nearest skid multiple when within 5 sheets)
+ *   MSF → # sheets (rounded to the nearest multiple of 5)
  *       → m² → × $/m² = gross invoice value
  *
  * The PO value keeps its own sq-ft basis (MSF × $/MSF) so both figures can be shown
  * side by side at line level (request #1).
  */
 
-/** A quantity this close to a full skid is treated as a full skid. */
-export const SHEET_SNAP_TOLERANCE = 5;
+/** Sheet counts from MSF always land on a multiple of this (team update on #24). */
+export const SHEET_ROUND_MULTIPLE = 5;
 
 const SQFT_PER_M2 = 10.7639104;
 
@@ -28,19 +28,16 @@ function round(v: number, dp: number): number {
 }
 
 /**
- * Snap a raw sheet count to the nearest multiple of `sheetsPerSkid` when it is within
- * `SHEET_SNAP_TOLERANCE` sheets of one; otherwise round to a whole sheet.
+ * Round a raw sheet count to the nearest multiple of `SHEET_ROUND_MULTIPLE` (5).
+ * e.g. 197 → 195, 198 → 200, 203 → 205. Ties (.5) round away from zero via Math.round.
  */
-export function snapSheets(raw: number, sheetsPerSkid = 200): number {
+export function snapSheets(raw: number, _sheetsPerSkid = 200): number {
   if (!Number.isFinite(raw) || raw <= 0) return 0;
-  if (sheetsPerSkid > 0) {
-    const nearest = Math.round(raw / sheetsPerSkid) * sheetsPerSkid;
-    if (nearest > 0 && Math.abs(raw - nearest) <= SHEET_SNAP_TOLERANCE) return nearest;
-  }
-  return Math.round(raw);
+  const snapped = Math.round(raw / SHEET_ROUND_MULTIPLE) * SHEET_ROUND_MULTIPLE;
+  return snapped > 0 ? snapped : SHEET_ROUND_MULTIPLE;
 }
 
-/** MSF → whole sheets for a sheet of the given square footage. */
+/** MSF → sheets (nearest multiple of 5) for a sheet of the given square footage. */
 export function sheetsFromMsf(
   qtyMsf: number | null | undefined,
   sqftPerSheet: number | null | undefined,
