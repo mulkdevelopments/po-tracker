@@ -25,6 +25,7 @@ import { escapeHtml, isEmailConfigured, parseEmailList, sendMail } from "../emai
 import {
   DEFAULT_LEAD_TIMES,
   derivedPlanningDate,
+  numberProductionSequence,
   recalculateProductionDates,
   type CapacityConfig,
 } from "../productionSchedule.js";
@@ -357,12 +358,26 @@ router.post("/recalculate-production", requireAuth, requirePage("production"), r
         ]),
       );
     }
+    // Keep the board numbered. Ordering is unchanged — this only re-spaces Seq so every
+    // row carries a number, including ones the capacity walk did not touch.
+    const scheduled = await prisma.purchaseOrder.findMany({ where: { company } });
+    const numbering = numberProductionSequence(scheduled);
+    if (numbering.length) {
+      await prisma.$transaction(
+        numbering.map((u) =>
+          prisma.purchaseOrder.update({
+            where: { id: u.id },
+            data: { productionSequence: u.productionSequence },
+          }),
+        ),
+      );
+    }
     const refreshed = await prisma.purchaseOrder.findMany({
       where: { company },
       include: poInclude,
       orderBy: { id: "desc" },
     });
-    res.json({ pos: refreshed, updatedCount: updates.length });
+    res.json({ pos: refreshed, updatedCount: updates.length, numberedCount: numbering.length });
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "Recalculate failed" });
   }

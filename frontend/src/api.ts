@@ -206,7 +206,7 @@ export const api = {
     }),
 
   recalculateProduction: () =>
-    request<{ pos: PurchaseOrder[]; updatedCount: number }>(
+    request<{ pos: PurchaseOrder[]; updatedCount: number; numberedCount: number }>(
       `/orders/recalculate-production${companyParam()}`,
       { method: "POST", body: JSON.stringify({}) },
     ),

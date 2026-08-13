@@ -16,6 +16,10 @@ export type SchedulePo = {
   totalM2?: number | null;
   productionStatus?: string | null;
   status?: string | null;
+  soNo?: string | null;
+  productionBegin?: string | null;
+  productionComplete?: string | null;
+  dispatchFromFactory?: string | null;
 };
 
 const TERMINAL_PROD = new Set(["PRODUCTION COMPLETE", "SHIPPED"]);
@@ -40,6 +44,19 @@ export function compareProductionOrder(a: SchedulePo, b: SchedulePo): number {
   const mb = parseISODate(b.allMaterialAvailable) || "9999-12-31";
   if (ma !== mb) return ma.localeCompare(mb);
   return a.id - b.id;
+}
+
+/** Orders the production board lists — anything with a production field filled in. */
+export function isOnProductionBoard(p: SchedulePo): boolean {
+  return !!(
+    p.soNo ||
+    p.productionStatus ||
+    p.productionBegin ||
+    p.productionComplete ||
+    p.dispatchFromFactory ||
+    p.allMaterialAvailable ||
+    p.productionSequence != null
+  );
 }
 
 export function isInSchedulePool(p: SchedulePo): boolean {

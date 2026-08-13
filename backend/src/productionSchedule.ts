@@ -29,9 +29,14 @@ export type SchedulePo = {
   productionComplete?: string | null;
   productionStart?: string | null;
   productionEtc?: string | null;
+  soNo?: string | null;
+  dispatchFromFactory?: string | null;
   poDate?: string | null;
   standardColorsOnly?: string | null;
 };
+
+/** Sequence numbers are spaced so a row can be slotted between two others by hand. */
+export const SEQUENCE_STEP = 10;
 
 export type LeadTimes = { standard: number; nonStandard: number };
 
@@ -118,6 +123,40 @@ export function compareProductionOrder(a: SchedulePo, b: SchedulePo): number {
   const mb = parseISODate(b.allMaterialAvailable) || "9999-12-31";
   if (ma !== mb) return ma.localeCompare(mb);
   return a.id - b.id;
+}
+
+/** Orders the production board lists — anything with a production field filled in. */
+export function isOnProductionBoard(p: SchedulePo): boolean {
+  return !!(
+    p.soNo ||
+    p.productionStatus ||
+    p.productionBegin ||
+    p.productionComplete ||
+    p.dispatchFromFactory ||
+    p.allMaterialAvailable ||
+    p.productionSequence != null
+  );
+}
+
+/**
+ * Number the production board 10, 20, 30… in the order it is displayed.
+ *
+ * Because `compareProductionOrder` reads the existing sequence as its second key, running
+ * this again keeps the order the operator sees and only re-spaces the numbers.
+ * Returns just the orders whose number changes.
+ */
+export function numberProductionSequence(
+  pos: SchedulePo[],
+): { id: number; productionSequence: number }[] {
+  const board = pos.filter(isOnProductionBoard).sort(compareProductionOrder);
+  const changed: { id: number; productionSequence: number }[] = [];
+  board.forEach((p, idx) => {
+    const productionSequence = (idx + 1) * SEQUENCE_STEP;
+    if ((p.productionSequence ?? null) !== productionSequence) {
+      changed.push({ id: p.id, productionSequence });
+    }
+  });
+  return changed;
 }
 
 export function isInSchedulePool(p: SchedulePo): boolean {

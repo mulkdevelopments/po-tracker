@@ -5,7 +5,7 @@ import PoDrawer from "../components/PoDrawer";
 import type { PurchaseOrder, MasterData } from "../types";
 import { fmtNum, fmtDate, fmtMoney } from "../utils";
 import { resolveGrossInvoiceValue } from "../paymentFlags";
-import { compareProductionOrder } from "../productionSchedule";
+import { compareProductionOrder, isOnProductionBoard } from "../productionSchedule";
 
 const STATUS_STYLES: Record<string, string> = {
   "UNDER PRODUCTION": "bg-blue-100 text-blue-700",
@@ -38,20 +38,9 @@ export default function ProductionPage() {
   };
   useEffect(() => { load(); }, []);
 
-  const isScheduled = (p: PurchaseOrder) =>
-    !!(
-      p.soNo ||
-      p.productionStatus ||
-      p.productionBegin ||
-      p.productionComplete ||
-      p.dispatchFromFactory ||
-      p.allMaterialAvailable ||
-      p.productionSequence != null
-    );
-
   const rows = useMemo(() => {
     const filtered = pos.filter((p) => {
-      if (onlyScheduled && !isScheduled(p)) return false;
+      if (onlyScheduled && !isOnProductionBoard(p)) return false;
       if (statusFilter && (p.productionStatus || "") !== statusFilter) return false;
       if (q) {
         const hay = `${p.poNo} ${p.soNo ?? ""} ${p.stockingLocation ?? ""} ${p.productionNotes ?? ""}`.toLowerCase();
@@ -127,9 +116,13 @@ export default function ProductionPage() {
     }
     setBusy(true);
     try {
-      const { pos: list, updatedCount } = await api.recalculateProduction();
+      const { pos: list, updatedCount, numberedCount } = await api.recalculateProduction();
       setPos(list);
-      alert(`Updated ${updatedCount} order(s).`);
+      alert(
+        `Updated dates on ${updatedCount} order(s)` +
+          (numberedCount ? ` · renumbered Seq on ${numberedCount}` : "") +
+          ".",
+      );
     } catch (e) {
       alert(e instanceof Error ? e.message : "Recalculate failed");
     } finally {
