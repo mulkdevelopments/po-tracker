@@ -114,8 +114,27 @@ interface ColFilter {
   selected: string[];
 }
 
+/** Worst payment variance for a row — under beats over so underpayments stay red. */
+function paymentRowAlert(
+  p: PurchaseOrder,
+  master: MasterData,
+): { kind: "under" | "over"; title: string } | null {
+  const tol = paymentTolerance(master);
+  const flags = [
+    downpaymentFlag(p, master.downpaymentPct ?? 0.5, tol),
+    balancePaymentFlag(p, tol),
+  ].filter((f): f is NonNullable<typeof f> => !!f && f.kind !== "ok");
+  if (!flags.length) return null;
+  const under = flags.find((f) => f.kind === "under");
+  const pick = under ?? flags[0];
+  const title = flags
+    .map((f) => `${f.label}: expected ${fmtMoney(f.expected)}, variance ${fmtMoney(f.variance)}`)
+    .join(" · ");
+  return { kind: pick.kind as "under" | "over", title };
+}
+
 export default function OrdersPage() {
-  const { user, canEdit, isSuperAdmin } = useAuth();
+  const { user, canEdit } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const isManager = isManagerRole(user?.role);
@@ -389,39 +408,6 @@ export default function OrdersPage() {
     const disp = displayValue(col, raw);
     if (col.key === "poNo") return <span className="font-mono font-semibold text-slate-900">{disp}</span>;
 
-    if (col.key === "dpAmount") {
-      const flag = downpaymentFlag(p, master.downpaymentPct ?? 0.5, paymentTolerance(master));
-      return (
-        <span className="inline-flex items-center gap-1.5 flex-wrap justify-end">
-          <span>{disp || <span className="text-slate-300">—</span>}</span>
-          {flag && flag.kind !== "ok" && (
-            <span
-              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
-              title={`Expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
-            >
-              {flag.label}
-            </span>
-          )}
-        </span>
-      );
-    }
-    if (col.key === "bpAmount") {
-      const flag = balancePaymentFlag(p, paymentTolerance(master));
-      return (
-        <span className="inline-flex items-center gap-1.5 flex-wrap justify-end">
-          <span>{disp || <span className="text-slate-300">—</span>}</span>
-          {flag && flag.kind !== "ok" && (
-            <span
-              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
-              title={`Expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
-            >
-              {flag.label}
-            </span>
-          )}
-        </span>
-      );
-    }
-
     return disp || <span className="text-slate-300">—</span>;
   };
 
@@ -572,48 +558,55 @@ export default function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((p) => (
-                <tr
-                  key={p.id}
-                  className={`cursor-pointer ${
-                    isManager && p.status === PI_PENDING_STATUS
-                      ? "bg-amber-50/80 hover:bg-amber-100/80"
-                      : isFinance && p.status === CI_PENDING_STATUS
-                        ? "bg-cyan-50/80 hover:bg-cyan-100/80"
+              {rows.map((p) => {
+                const payAlert = paymentRowAlert(p, master);
+                const rowTone = payAlert
+                  ? payAlert.kind === "under"
+                    ? "bg-red-50 hover:bg-red-100/90"
+                    : "bg-amber-50 hover:bg-amber-100/90"
+                  : isManager && p.status === PI_PENDING_STATUS
+                    ? "bg-amber-50/80 hover:bg-amber-100/80"
+                    : isFinance && p.status === CI_PENDING_STATUS
+                      ? "bg-cyan-50/80 hover:bg-cyan-100/80"
                       : isMaintainer && p.status === PI_REJECTED_STATUS
                         ? "bg-red-50/80 hover:bg-red-100/80"
                         : isMaintainer && p.status === CI_REJECTED_STATUS
                           ? "bg-red-50/80 hover:bg-red-100/80"
-                        : ""
-                  }`}
-                  onClick={() => setSelected(p)}
-                >
-                  {COLUMNS.map((col) => (
-                    <td
-                      key={col.key as string}
-                      className={NUMERIC_TYPES.includes(col.type) ? "text-right tabular-nums" : ""}
-                    >
-                      {renderCell(p, col)}
+                          : "hover:bg-slate-50";
+                return (
+                  <tr
+                    key={p.id}
+                    className={`cursor-pointer ${rowTone}`}
+                    title={payAlert?.title}
+                    onClick={() => setSelected(p)}
+                  >
+                    {COLUMNS.map((col) => (
+                      <td
+                        key={col.key as string}
+                        className={NUMERIC_TYPES.includes(col.type) ? "text-right tabular-nums" : ""}
+                      >
+                        {renderCell(p, col)}
+                      </td>
+                    ))}
+                    <td className="actions-col">
+                      <div className="flex items-center justify-end gap-2">
+                        {canEdit() && (
+                          <button
+                            type="button"
+                            title="Delete order"
+                            aria-label={`Delete PO ${p.poNo}`}
+                            onClick={(e) => handleDelete(e, p)}
+                            className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50"
+                          >
+                            <X size={15} />
+                          </button>
+                        )}
+                        <span className="text-indigo-600 text-xs whitespace-nowrap">Open ›</span>
+                      </div>
                     </td>
-                  ))}
-                  <td className="actions-col">
-                    <div className="flex items-center justify-end gap-2">
-                      {isSuperAdmin() && (
-                        <button
-                          type="button"
-                          title="Delete order"
-                          aria-label={`Delete PO ${p.poNo}`}
-                          onClick={(e) => handleDelete(e, p)}
-                          className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50"
-                        >
-                          <X size={15} />
-                        </button>
-                      )}
-                      <span className="text-indigo-600 text-xs whitespace-nowrap">Open ›</span>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                  </tr>
+                );
+              })}
               {rows.length === 0 && (
                 <tr>
                   <td colSpan={COLUMNS.length + 1} className="text-center text-slate-400 py-8">

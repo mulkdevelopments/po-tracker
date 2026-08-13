@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, AuthUser, MasterData, PoLine, ReferenceData } from "../types";
-import { canAdvanceStage, canEditProductionActualsForPo, canManageUsers, getAllowedAdvanceStages, api } from "../api";
+import { canAdvanceStage, canEditProductionActualsForPo, canEditPo, getAllowedAdvanceStages, api } from "../api";
 import { fmtMoney, fmtNum, fmtDate, todayISO, addWeeksISO } from "../utils";
 import {
   deriveStatusFromFields,
@@ -10,6 +10,7 @@ import {
   getSubstageLabel,
   type WorkflowCompany,
 } from "../workflows";
+import MoneyInput from "./MoneyInput";
 import PipelineProgress from "./PipelineProgress";
 import PipelineStepActions from "./PipelineStepActions";
 import StageMilestoneEditor from "./StageMilestoneEditor";
@@ -102,9 +103,23 @@ function Field({ label, val }: { label: string; val: React.ReactNode }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+  tone,
+}: {
+  title: string;
+  children: React.ReactNode;
+  tone?: "under" | "over" | null;
+}) {
+  const toneClass =
+    tone === "under"
+      ? "rounded-lg border border-red-200 bg-red-50/80 p-3 -mx-1"
+      : tone === "over"
+        ? "rounded-lg border border-amber-200 bg-amber-50/80 p-3 -mx-1"
+        : "";
   return (
-    <div className="po-drawer-section">
+    <div className={`po-drawer-section ${toneClass}`}>
       <div className="po-drawer-section-title">{title}</div>
       <div className="po-drawer-section-grid">{children}</div>
     </div>
@@ -138,7 +153,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     po.status !== CI_REJECTED_STATUS &&
     allowedStages.length > 0;
   const canEditProductionActualsPo = canEditProductionActualsForPo(user, pipelineStatus, company, poRec);
-  const canDeletePo = canManageUsers(user);
+  const canDeletePo = canEditPo(user);
   const showRejectPi = canRejectPiRole(user.role) && po.status === PI_PENDING_STATUS;
   const showResubmitPi = canResubmitPiRole(user.role) && po.status === PI_REJECTED_STATUS;
   const showRejectCi = canRejectCiRole(user.role) && po.status === CI_PENDING_STATUS;
@@ -488,11 +503,19 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       <tr key={i}>
                         {editLineCols.map((c) => (
                           <td key={c.k as string} className="p-0.5">
-                            <input
-                              className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
-                              value={row[c.k as string] ?? ""}
-                              onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
-                            />
+                            {c.money ? (
+                              <MoneyInput
+                                className={c.w || "w-24"}
+                                value={row[c.k as string] ?? ""}
+                                onChange={(v) => setLineVal(i, c.k as string, v)}
+                              />
+                            ) : (
+                              <input
+                                className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
+                                value={row[c.k as string] ?? ""}
+                                onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
+                              />
+                            )}
                           </td>
                         ))}
                         <td className="p-0.5">
@@ -615,8 +638,8 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                               <td className="text-right">{fmtNum(l.qtyM2, 2)}</td>
                               <td className="text-right">{fmtNum(l.sheets, 0)}</td>
                               <td className="text-right">{fmtNum(l.skids, 0)}</td>
-                              <td className="text-right">{fmtNum(sheetBasis ? l.unitSheet : l.unitMsf, 2)}</td>
-                              <td className="text-right">{fmtNum(l.unitM2, 2)}</td>
+                              <td className="text-right">{fmtMoney(sheetBasis ? l.unitSheet : l.unitMsf)}</td>
+                              <td className="text-right">{fmtMoney(l.unitM2)}</td>
                               <td className="text-right">{fmtMoney(l.extPo)}</td>
                               <td className="text-right">{fmtMoney(lineInv)}</td>
                               {showActuals && (
@@ -705,7 +728,13 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                     </div>
                   )}
                 </Section>
-                <Section title="Downpayment">
+                <Section
+                  title="Downpayment"
+                  tone={(() => {
+                    const flag = downpaymentFlag(po, master.downpaymentPct ?? 0.5, paymentTolerance(master));
+                    return flag && flag.kind !== "ok" ? flag.kind : null;
+                  })()}
+                >
                   <Field label="DP date" val={po.dpDate} />
                   <Field label="DP amount" val={fmtMoney(po.dpAmount)} />
                   {(() => {
@@ -715,13 +744,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       <div className="col-span-2">
                         <Field
                           label="Payment check"
-                          val={
-                            <span
-                              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
-                            >
-                              {flag.label} · expected {fmtMoney(flag.expected)} · variance {fmtMoney(flag.variance)}
-                            </span>
-                          }
+                          val={`${flag.label} · expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
                         />
                       </div>
                     );
@@ -766,6 +789,8 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 <Section title="Commercial invoice">
                   <Field label="CI #" val={po.ciNo} />
                   <Field label="CI date" val={po.ciDate} />
+                  <Field label="Freight" val={fmtMoney(po.freight)} />
+                  <Field label="Inland" val={fmtMoney(po.inland)} />
                   <Field label="CI value" val={fmtMoney(po.ciValue)} />
                   <Field label="Balance due" val={fmtMoney(po.balanceDue)} />
                   <Field label="CI approved" val={po.ciApprovedDate ? fmtDate(po.ciApprovedDate) : null} />
@@ -774,6 +799,14 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       <CiExcelDownload poId={po.id} />
                     </div>
                   )}
+                </Section>
+                <Section
+                  title="Balance payment"
+                  tone={(() => {
+                    const flag = balancePaymentFlag(po, paymentTolerance(master));
+                    return flag && flag.kind !== "ok" ? flag.kind : null;
+                  })()}
+                >
                   <Field label="BP date" val={po.bpDate} />
                   <Field label="BP amount" val={fmtMoney(po.bpAmount)} />
                   {(() => {
@@ -783,13 +816,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       <div className="col-span-2">
                         <Field
                           label="Payment check"
-                          val={
-                            <span
-                              className={`stage-pill ${flag.kind === "under" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900"}`}
-                            >
-                              {flag.label} · expected {fmtMoney(flag.expected)} · variance {fmtMoney(flag.variance)}
-                            </span>
-                          }
+                          val={`${flag.label} · expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
                         />
                       </div>
                     );
