@@ -112,12 +112,7 @@ function Section({
   children: React.ReactNode;
   tone?: "under" | "over" | null;
 }) {
-  const toneClass =
-    tone === "under"
-      ? "rounded-lg border border-red-200 bg-red-50/80 p-3 -mx-1"
-      : tone === "over"
-        ? "rounded-lg border border-amber-200 bg-amber-50/80 p-3 -mx-1"
-        : "";
+  const toneClass = tone === "under" ? "pay-under" : tone === "over" ? "pay-over" : "";
   return (
     <div className={`po-drawer-section ${toneClass}`}>
       <div className="po-drawer-section-title">{title}</div>
@@ -158,6 +153,18 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const showResubmitPi = canResubmitPiRole(user.role) && po.status === PI_REJECTED_STATUS;
   const showRejectCi = canRejectCiRole(user.role) && po.status === CI_PENDING_STATUS;
   const showResubmitCi = canResubmitCiRole(user.role) && po.status === CI_REJECTED_STATUS;
+
+  const payTol = paymentTolerance(master);
+  const dpPayFlag = downpaymentFlag(po, master.downpaymentPct ?? 0.5, payTol);
+  const bpPayFlag = balancePaymentFlag(po, payTol);
+  const payAlerts = [dpPayFlag, bpPayFlag].filter(
+    (f): f is NonNullable<typeof f> => !!f && f.kind !== "ok",
+  );
+  const payBannerTone = payAlerts.some((f) => f.kind === "under")
+    ? "under"
+    : payAlerts.some((f) => f.kind === "over")
+      ? "over"
+      : null;
 
   const editSections = useMemo(
     () =>
@@ -558,6 +565,22 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
             {tab === "summary" && (
               <>
                 <PipelineProgress company={company} status={po.status} po={po} compact />
+                {payBannerTone && (
+                  <div className={`po-drawer-pay-banner pay-${payBannerTone}`}>
+                    {dpPayFlag && dpPayFlag.kind !== "ok" && (
+                      <div>
+                        Downpayment {dpPayFlag.label.toLowerCase()} · expected{" "}
+                        {fmtMoney(dpPayFlag.expected)} · variance {fmtMoney(dpPayFlag.variance)}
+                      </div>
+                    )}
+                    {bpPayFlag && bpPayFlag.kind !== "ok" && (
+                      <div>
+                        Balance payment {bpPayFlag.label.toLowerCase()} · expected{" "}
+                        {fmtMoney(bpPayFlag.expected)} · variance {fmtMoney(bpPayFlag.variance)}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   className="po-drawer-link-btn"
@@ -730,25 +753,18 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 </Section>
                 <Section
                   title="Downpayment"
-                  tone={(() => {
-                    const flag = downpaymentFlag(po, master.downpaymentPct ?? 0.5, paymentTolerance(master));
-                    return flag && flag.kind !== "ok" ? flag.kind : null;
-                  })()}
+                  tone={dpPayFlag && dpPayFlag.kind !== "ok" ? dpPayFlag.kind : null}
                 >
                   <Field label="DP date" val={po.dpDate} />
                   <Field label="DP amount" val={fmtMoney(po.dpAmount)} />
-                  {(() => {
-                    const flag = downpaymentFlag(po, master.downpaymentPct ?? 0.5, paymentTolerance(master));
-                    if (!flag || flag.kind === "ok") return null;
-                    return (
-                      <div className="col-span-2">
-                        <Field
-                          label="Payment check"
-                          val={`${flag.label} · expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
-                        />
-                      </div>
-                    );
-                  })()}
+                  {dpPayFlag && dpPayFlag.kind !== "ok" && (
+                    <div className="col-span-2">
+                      <Field
+                        label="Payment check"
+                        val={`${dpPayFlag.label} · expected ${fmtMoney(dpPayFlag.expected)} · variance ${fmtMoney(dpPayFlag.variance)}`}
+                      />
+                    </div>
+                  )}
                 </Section>
                 <Section title="Production">
                   <Field label="Site" val={po.productionSite} />
@@ -802,25 +818,18 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 </Section>
                 <Section
                   title="Balance payment"
-                  tone={(() => {
-                    const flag = balancePaymentFlag(po, paymentTolerance(master));
-                    return flag && flag.kind !== "ok" ? flag.kind : null;
-                  })()}
+                  tone={bpPayFlag && bpPayFlag.kind !== "ok" ? bpPayFlag.kind : null}
                 >
                   <Field label="BP date" val={po.bpDate} />
                   <Field label="BP amount" val={fmtMoney(po.bpAmount)} />
-                  {(() => {
-                    const flag = balancePaymentFlag(po, paymentTolerance(master));
-                    if (!flag || flag.kind === "ok") return null;
-                    return (
-                      <div className="col-span-2">
-                        <Field
-                          label="Payment check"
-                          val={`${flag.label} · expected ${fmtMoney(flag.expected)} · variance ${fmtMoney(flag.variance)}`}
-                        />
-                      </div>
-                    );
-                  })()}
+                  {bpPayFlag && bpPayFlag.kind !== "ok" && (
+                    <div className="col-span-2">
+                      <Field
+                        label="Payment check"
+                        val={`${bpPayFlag.label} · expected ${fmtMoney(bpPayFlag.expected)} · variance ${fmtMoney(bpPayFlag.variance)}`}
+                      />
+                    </div>
+                  )}
                 </Section>
               </div>
             )}
