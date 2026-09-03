@@ -49,6 +49,45 @@ const APP_OWNED = new Set(["productionSequence", "priority"]);
  */
 const DOC_NUMBER_FIELDS = new Set(["ciNo", "piNo", "bol", "containerNo", "soNo"]);
 
+/**
+ * Header totals and the line column each is the sum of. Skids is deliberately absent:
+ * a skid count is a packing decision, not the sum of the per-line counts.
+ */
+const TOTAL_OF_LINES: Record<string, string> = {
+  poValue: "extPo",
+  grossInvoiceValue: "extInv",
+  totalM2: "qtyM2",
+};
+
+function sumLines(lines: Record<string, unknown>[], field: string): number {
+  return lines.reduce((t, l) => t + (Number(l[field]) || 0), 0);
+}
+
+/**
+ * Reconcile the sheet's header totals against its own line items.
+ *
+ * Those totals are spreadsheet formulas, and some ranges stop short of the last row —
+ * three orders in this sheet state a PI value covering all but their final line. Where a
+ * header disagrees with the lines beneath it, the lines win. An explicit zero is left
+ * alone: that is how the sheet writes off a superseded revision.
+ */
+function reconcileHeaderWithLines(
+  header: Record<string, unknown>,
+  lines: Record<string, unknown>[],
+): { header: Record<string, unknown>; notes: string[] } {
+  const out = { ...header };
+  const notes: string[] = [];
+  for (const [field, lineField] of Object.entries(TOTAL_OF_LINES)) {
+    const stated = Number(out[field]);
+    const summed = sumLines(lines, lineField);
+    if (!Number.isFinite(stated) || stated === 0 || summed <= 0) continue;
+    if (Math.abs(stated - summed) <= 1) continue;
+    out[field] = summed;
+    notes.push(`${field}: sheet says ${stated.toFixed(2)}, its lines total ${summed.toFixed(2)}`);
+  }
+  return { header: out, notes };
+}
+
 const blank = (v: unknown) => v == null || v === "";
 
 /**
@@ -116,6 +155,11 @@ async function run(company: Company, apply: boolean) {
     include: { lines: true },
   });
   const byKey = new Map(existing.map((p) => [`${p.poNo}|${p.rev ?? 0}`, p]));
+  // A revision raised in the app is newer than anything the sheet knows about it.
+  const latestRev = new Map<string, number>();
+  for (const p of existing) {
+    latestRev.set(p.poNo, Math.max(latestRev.get(p.poNo) ?? 0, p.rev ?? 0));
+  }
 
   let created = 0;
   let updated = 0;
@@ -124,6 +168,7 @@ async function run(company: Company, apply: boolean) {
   let linesAdded = 0;
   const overwriteLog: string[] = [];
   const ignoredLog: string[] = [];
+  const reconcileLog: string[] = [];
   const lineOnlyInDb: string[] = [];
 
   for (const o of orders) {
@@ -137,20 +182,38 @@ async function run(company: Company, apply: boolean) {
       continue;
     }
 
+    const trackerLines = (o.lines ?? []).map(orderLineFromTracker);
+    const reconciled = reconcileHeaderWithLines(orderHeaderFromTracker(o), trackerLines);
+    for (const note of reconciled.notes) {
+      reconcileLog.push(`${poNo} r${rev} ${note}`);
+    }
+
+    // The sheet still shows a revision the app has since superseded — it cannot revive it.
+    const skip = new Set(APP_OWNED);
+    if (rev < (latestRev.get(poNo) ?? 0)) {
+      for (const f of ["active", "status"]) {
+        if (!same((po as unknown as Record<string, unknown>)[f], reconciled.header[f])) {
+          ignoredLog.push(
+            `${poNo} r${rev} ${f}: superseded by rev ${latestRev.get(poNo)} in the app, sheet still shows it live`,
+          );
+        }
+        skip.add(f);
+      }
+    }
+
+    const wantedHeader = reconciled.header;
     const header = diffFields(
       po as unknown as Record<string, unknown>,
-      orderHeaderFromTracker(o),
-      APP_OWNED,
+      wantedHeader,
+      skip,
       company,
     );
     fillCount += header.fills.length;
-    const wantedHeader = orderHeaderFromTracker(o);
     const describe = (f: string) =>
       `${poNo} r${rev} ${f}: app "${(po as unknown as Record<string, unknown>)[f]}" -> sheet "${wantedHeader[f]}"`;
     for (const f of header.overwrites) overwriteLog.push(describe(f));
     for (const f of header.ignored) ignoredLog.push(describe(f));
 
-    const trackerLines = (o.lines ?? []).map(orderLineFromTracker);
     const dbLines = new Map(po.lines.map((l) => [l.lineNo, l]));
     const lineWrites: { id?: number; data: Record<string, unknown> }[] = [];
     for (const tl of trackerLines) {
@@ -212,6 +275,10 @@ async function run(company: Company, apply: boolean) {
     console.log(`\n  overwriting ${overwriteLog.length} value(s) the app already held:`);
     for (const l of overwriteLog.slice(0, 60)) console.log(`    ${l}`);
     if (overwriteLog.length > 60) console.log(`    …and ${overwriteLog.length - 60} more`);
+  }
+  if (reconcileLog.length) {
+    console.log(`\n  header totals taken from the sheet's own lines instead of its total cell:`);
+    for (const l of reconcileLog) console.log(`    ${l}`);
   }
   if (ignoredLog.length) {
     console.log(`\n  kept — sheet value rejected (stray cell, or app is further along):`);
