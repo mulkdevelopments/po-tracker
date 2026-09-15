@@ -2,7 +2,6 @@ import type { Company } from "./companies.js";
 
 export interface PiDocumentSettings {
   issuerName?: string;
-  issuerAddress?: string;
   customerName?: string;
   customerTrn?: string;
   salesPerson?: string;
@@ -24,7 +23,6 @@ export interface PiDocumentSettings {
 
 export const DEFAULT_PI_DOCUMENT: PiDocumentSettings = {
   issuerName: "NextGen Building Supplies Trading FZE LLC",
-  issuerAddress: "BC-630930 2nd Floor, Amber Gem Tower, Ajman, UAE",
   customerName: "TIMBERBASE, A UFP Industries Company",
   customerTrn: "",
   salesPerson: "Sarfaraz Khan",
@@ -41,12 +39,13 @@ export const DEFAULT_PI_DOCUMENT: PiDocumentSettings = {
   iban: "AE31050000000029336872",
   bankAddress: "SHEIKH RASHID BIN SAEED STREET, ABU DHABI, U.A.E.",
   terms: [
-    "Tolerance in Material: +/- 10% of the ordered quantity is acceptable.",
-    "Tolerance in Quantity: +/- 10% of the ordered quantity is acceptable.",
-    "Tolerance in Color: +/- 10% of the ordered quantity is acceptable.",
+    "Tolerance in Material: Aluminium Skin: +/- 0.05mm, +/- 2.0mm, Length: +/- 4.0mm, Thickness: +/- 0.2mm for 4MM",
+    "Tolerance in Quantity: Total Quantity Would Be (+)0-2% Subject to Production Run",
+    "Tolerance in Color Between Batches: Color Variation b/w Batches: dE <= 2.0",
+    "Tolerance in Surface Defects: if not visible from 3ft. distance, quality is acceptable.",
   ],
   taxNote:
-    "As per the Federal Decree Law No. 8 of 2017 on Value Added Tax, the supply of goods and services under Reverse Charge Basis is subject to VAT at 5%. The recipient is responsible for accounting for VAT under the Reverse Charge mechanism.",
+    "Nextgen Building Supplies Trading FZE LLC As per article 48 of Decree Law No. 8, \u201cCustomer shall be responsible for tax obligations and accounting of tax in respect of these supplies on Reverse Charge Basis",
 };
 
 const SYNERGY_CUSTOMER = "Cynergy";

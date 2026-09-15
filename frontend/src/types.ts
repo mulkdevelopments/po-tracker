@@ -211,7 +211,6 @@ export interface MasterData {
 
 export interface PiDocumentSettings {
   issuerName?: string;
-  issuerAddress?: string;
   customerName?: string;
   customerTrn?: string;
   salesPerson?: string;

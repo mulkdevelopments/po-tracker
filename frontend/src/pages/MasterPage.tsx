@@ -709,7 +709,6 @@ function PiDocumentCard({
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Field label="Issuer company name" value={draft.issuerName ?? ""} onChange={(v) => set("issuerName", v)} wide />
-        <Field label="Issuer address (page footer)" value={draft.issuerAddress ?? ""} onChange={(v) => set("issuerAddress", v)} wide />
         <Field label="Customer name" value={draft.customerName ?? ""} onChange={(v) => set("customerName", v)} />
         <Field label="Customer TRN" value={draft.customerTrn ?? ""} onChange={(v) => set("customerTrn", v)} />
         <Field label="Sales person" value={draft.salesPerson ?? ""} onChange={(v) => set("salesPerson", v)} />
