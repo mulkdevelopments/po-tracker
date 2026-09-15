@@ -159,6 +159,10 @@ function parseMoney(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseMoneyOrNull(raw: string | null): number | null {
+  return raw ? parseMoney(raw) : null;
+}
+
 /** UFP footer: Total:$    65,006.90 */
 function parsePdfPoTotal(text: string): number | null {
   const m = text.match(/Total\s*:?\s*\$?\s*([\d,]+\.\d{2})\b/i);
@@ -166,20 +170,27 @@ function parsePdfPoTotal(text: string): number | null {
   return parseMoney(m[1]);
 }
 
-/** Near a part #: PRICE/UNIT …/MSF and AMOUNT $… */
-function parsePdfLinePricing(ctx: string): {
+/** Last, i.e. closest, match of a pattern in a stretch of text. */
+function lastMatch(text: string, re: RegExp): string | null {
+  const all = [...text.matchAll(new RegExp(re.source, re.flags.replace("g", "") + "g"))];
+  return all.length ? (all[all.length - 1][1] ?? null) : null;
+}
+
+/**
+ * Quantity, rate and amount for one line. On a UFP PO these print to the left of the part
+ * number, so `before` is the run of text between the previous part number and this one and
+ * the values wanted are the last ones in it.
+ */
+function parsePdfLinePricing(before: string): {
   amount: number | null;
   unitMsf: number | null;
   qtyMsf: number | null;
 } {
-  const amountM =
-    ctx.match(/\$\s*([\d,]+\.\d{2})\b/) ||
-    ctx.match(/AMOUNT\s*\$?\s*([\d,]+\.\d{2})/i);
-  const unitM = ctx.match(/([\d,]+\.?\d*)\s*\/\s*MSF\b/i);
-  const qtyM = ctx.match(/([\d,]+\.?\d*)\s*MSF\b/i);
-  const unitMsf = unitM?.[1] ? parseMoney(unitM[1]) : null;
-  const qtyMsf = qtyM?.[1] ? parseMoney(qtyM[1]) : null;
-  let amount = amountM?.[1] ? parseMoney(amountM[1]) : null;
+  const unitMsf = parseMoneyOrNull(lastMatch(before, /([\d,]+\.?\d*)\s*\/\s*MSF\b/i));
+  // Strip the rate so it cannot be read back as the quantity.
+  const withoutRate = before.replace(/[\d,]+\.?\d*\s*\/\s*MSF\b/gi, " ");
+  const qtyMsf = parseMoneyOrNull(lastMatch(withoutRate, /([\d,]+\.?\d*)\s*MSF\b/i));
+  let amount = parseMoneyOrNull(lastMatch(before, /\$\s*([\d,]+\.\d{2})\b/));
   if (amount == null && unitMsf != null && qtyMsf != null) {
     amount = Math.round(unitMsf * qtyMsf * 100) / 100;
   }
@@ -217,8 +228,48 @@ function summarizeLines(lines: Record<string, unknown>[]) {
   };
 }
 
+/** A part number printed on a PO: any catalog number, or anything shaped like one. */
+function partNumberRe(products: ProductRow[]): RegExp {
+  const known = products
+    .map((p) => p.partNo)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${[...known, "\\d{6}"].join("|")})\\b`, "g");
+}
+
+/**
+ * Where each part number sits in the text, with the run of text before it (its quantity,
+ * rate and amount) and after it (its packaging). Bounded by the neighbouring part numbers
+ * so one line's figures can never be read as another's.
+ */
+function findPartHits(clean: string, products: ProductRow[]) {
+  const re = partNumberRe(products);
+  const at: { partNo: string; index: number; end: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(clean)) && at.length < 200) {
+    const partNo = m[1];
+    const prev = at[at.length - 1];
+    // The same number twice in one row is one line, not two.
+    if (prev?.partNo === partNo && m.index - prev.end < 80) continue;
+    at.push({ partNo, index: m.index, end: m.index + partNo.length });
+  }
+  return at.map((hit, i) => ({
+    ...hit,
+    before: clean.slice(at[i - 1]?.end ?? 0, hit.index),
+    after: clean.slice(hit.end, Math.min(at[i + 1]?.index ?? clean.length, hit.end + 200)),
+  }));
+}
+
+/** Exported as `decodePoText` for the decode CLI — see scripts/decodePoPdf.ts. */
 function guessFields(text: string, ref: Ref) {
-  const clean = text.replace(/\s+/g, " ");
+  // The column headers interleave the first item's figures in the extracted text
+  // ("1 …SLVRFRST G1S PRODUCT/DESCRIPTION QUANTITY 18.477 UOM MSF PRICE/UNIT 720.0000/MSF"),
+  // so drop them and every item row reads the same way.
+  const clean = text
+    .replace(/\s+/g, " ")
+    .replace(/\b(?:ITM|PRODUCT\/DESCRIPTION|QUANTITY|UOM|PRICE\/UNIT|AMOUNT)\b/gi, " ")
+    .replace(/\s+/g, " ");
   const productByPart = new Map(ref.products.map((p) => [p.partNo, p]));
 
   // Match a stocking location by its full name, or by "<city> ... <state>"
@@ -259,23 +310,36 @@ function guessFields(text: string, ref: Ref) {
 
   const asOf = String(out.poDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
 
-  // Lines: find each part number in the text and enrich from the catalog + PDF pricing.
+  // Lines: every part number in the text, enriched from the catalog + the PO's own figures.
   const lines: Record<string, unknown>[] = [];
-  const seen = new Set<string>();
-  const partRe = /\b(6\d{5})\b/g;
-  let m: RegExpExecArray | null;
   let idx = 0;
-  while ((m = partRe.exec(clean)) && idx < 40) {
-    const partNo = m[1];
-    if (seen.has(partNo)) continue;
-    const product = productByPart.get(partNo);
-    if (!product) continue;
-    seen.add(partNo);
-    // Look ahead far enough to catch MSF rate + $ amount after the part # block
-    const ctx = clean.slice(Math.max(0, m.index - 40), Math.min(clean.length, m.index + 420));
-    const { sheets, skids } = parseLineQty(ctx, ref.sheetsPerSkid);
-    const pdf = parsePdfLinePricing(ctx);
-    lines.push(lineFromProduct(product, ++idx, sheets, ref.sheetsPerSkid, asOf, skids, pdf));
+  for (const hit of findPartHits(clean, ref.products)) {
+    if (idx >= 40) break;
+    const { sheets, skids } = parseLineQty(hit.after, ref.sheetsPerSkid);
+    const pdf = parsePdfLinePricing(hit.before);
+    const product = productByPart.get(hit.partNo);
+    if (product) {
+      lines.push(lineFromProduct(product, ++idx, sheets, ref.sheetsPerSkid, asOf, skids, pdf));
+      continue;
+    }
+    // Not in the catalog. If it is priced and packaged like a line item, show it as one
+    // for the operator to finish rather than dropping it from the order silently.
+    if (pdf.amount == null && sheets == null) continue;
+    lines.push({
+      lineNo: ++idx,
+      partNo: hit.partNo,
+      size: null,
+      color: null,
+      sheets,
+      skids,
+      qtyMsf: pdf.qtyMsf,
+      unitMsf: null,
+      extPo: null,
+      catalogExt: null,
+      custUnitMsf: pdf.unitMsf,
+      custExtPo: pdf.amount,
+      matched: false,
+    });
   }
 
   // Fallback: if no catalog parts matched, do best-effort size/color extraction.
@@ -285,7 +349,7 @@ function guessFields(text: string, ref: Ref) {
     let mm: RegExpExecArray | null;
     while ((mm = re.exec(clean)) && idx < 20) {
       const ctx = clean.slice(Math.max(0, mm.index - 160), Math.min(clean.length, mm.index + 220));
-      const partNo = (ctx.match(/\b(6\d{5})\b/) || [])[1] || "";
+      const partNo = (ctx.match(/\b(\d{6})\b/) || [])[1] || "";
       const qty = (ctx.match(/(\d{2,4})\s*(?:SHEETS?|PCS?|EA)/i) || [])[1];
       lines.push({
         lineNo: ++idx,
@@ -320,7 +384,7 @@ function guessFields(text: string, ref: Ref) {
   return out;
 }
 
-async function loadRef(company: ReturnType<typeof parseCompany>): Promise<Ref> {
+export async function loadRef(company: ReturnType<typeof parseCompany>): Promise<Ref> {
   const [products, colors, locations, config] = await Promise.all([
     prisma.product.findMany({ where: { company }, include: { prices: true } }),
     prisma.color.findMany({ where: { company } }),
@@ -391,4 +455,5 @@ router.get("/product/:partNo", requireAuth, requirePage("upload"), async (req, r
   res.json({ line: lineFromProduct(product, 1, null, sheetsPerSkid, asOf), product });
 });
 
+export { guessFields as decodePoText };
 export default router;
