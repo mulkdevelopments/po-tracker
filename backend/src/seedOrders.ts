@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { missingHeaderTotals } from "./lineMath.js";
+import { balanceDueFromCi, missingHeaderTotals } from "./lineMath.js";
 
 export type Company = "UFP" | "SYNERGY";
 export type OrderRecord = Record<string, unknown> & { lines?: Record<string, unknown>[] };
@@ -17,6 +17,12 @@ export const i = (v: unknown): number | null => (v == null || v === "" ? null : 
  */
 export function orderHeaderFromTracker(o: OrderRecord): Record<string, unknown> {
   const lines = o.lines ?? [];
+  const ciCharges = { ciValue: n(o.ciValue), freight: n(o.freight), inland: n(o.inland) };
+  // Balance due is the app's figure — CI net + freight + inland — rather than the sheet's
+  // column. An order whose balance payment is already recorded keeps what the sheet says
+  // was invoiced: those were billed before this rule, under the downpayment arrangement.
+  const settled = n(o.bpAmount) != null || s(o.bpDate) != null;
+  const balanceDue = settled ? n(o.balanceDue) : (balanceDueFromCi(ciCharges) ?? n(o.balanceDue));
   // The tracker sheet has no gross invoice column of its own: for UFP the PI value is
   // that same m²-based figure, and Cynergy's sheet leaves it to the lines (request #1).
   const totals = missingHeaderTotals(
@@ -59,10 +65,8 @@ export function orderHeaderFromTracker(o: OrderRecord): Record<string, unknown> 
     ciNo: s(o.ciNo),
     ciDate: s(o.ciDate),
     revisionSent: s(o.revisionSent),
-    freight: n(o.freight),
-    inland: n(o.inland),
-    ciValue: n(o.ciValue),
-    balanceDue: n(o.balanceDue),
+    ...ciCharges,
+    balanceDue,
     bpDate: s(o.bpDate),
     ciToBp: i(o.ciToBp),
     bpAmount: n(o.bpAmount),

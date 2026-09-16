@@ -188,11 +188,17 @@ async function run(company: Company, apply: boolean) {
       reconcileLog.push(`${poNo} r${rev} ${note}`);
     }
 
-    // The sheet still shows a revision the app has since superseded — it cannot revive it.
+    const current = po as unknown as Record<string, unknown>;
     const skip = new Set(APP_OWNED);
+
+    // What was billed on an invoice already paid stands, even though balance due is now
+    // derived from the CI charges (orderHeaderFromTracker) rather than read off the sheet.
+    if (!blank(current.bpAmount) || !blank(current.bpDate)) skip.add("balanceDue");
+
+    // The sheet still shows a revision the app has since superseded — it cannot revive it.
     if (rev < (latestRev.get(poNo) ?? 0)) {
       for (const f of ["active", "status"]) {
-        if (!same((po as unknown as Record<string, unknown>)[f], reconciled.header[f])) {
+        if (!same(current[f], reconciled.header[f])) {
           ignoredLog.push(
             `${poNo} r${rev} ${f}: superseded by rev ${latestRev.get(poNo)} in the app, sheet still shows it live`,
           );
@@ -202,15 +208,11 @@ async function run(company: Company, apply: boolean) {
     }
 
     const wantedHeader = reconciled.header;
-    const header = diffFields(
-      po as unknown as Record<string, unknown>,
-      wantedHeader,
-      skip,
-      company,
-    );
+    const header = diffFields(current, wantedHeader, skip, company);
     fillCount += header.fills.length;
     const describe = (f: string) =>
-      `${poNo} r${rev} ${f}: app "${(po as unknown as Record<string, unknown>)[f]}" -> sheet "${wantedHeader[f]}"`;
+      `${poNo} r${rev} ${f}: app "${current[f]}" -> ` +
+      `${f === "balanceDue" ? "derived" : "sheet"} "${wantedHeader[f]}"`;
     for (const f of header.overwrites) overwriteLog.push(describe(f));
     for (const f of header.ignored) ignoredLog.push(describe(f));
 
