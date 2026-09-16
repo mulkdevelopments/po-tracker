@@ -67,6 +67,12 @@ const CONTENT_BOTTOM = 642;
 const ROW_STEP = 10.3;
 /** First content baseline on a continuation page, clear of the letterhead logo. */
 const CONTINUATION_TOP = 130;
+/**
+ * The master leaves an empty band between the letterhead and the title. A PI
+ * with more item rows than the master's sample borrows from that band instead
+ * of spilling onto a second page.
+ */
+const MAX_TOP_LIFT = 96;
 
 const COLS = {
   sno: { x: 34.5, w: 19.6 },
@@ -238,19 +244,25 @@ interface Ctx {
   italic: PDFFont;
   /** Current baseline, in points from the top of the page. */
   y: number;
+  /** Measuring pass: keep the metrics, skip the ink and the page breaks. */
+  dry: boolean;
+  pageCount: number;
 }
 
 function startPage(ctx: Ctx): void {
-  ctx.page = ctx.pdf.addPage([PAGE_W, PAGE_H]);
-  ctx.pages.push(ctx.page);
-  if (ctx.letterhead) {
-    ctx.page.drawPage(ctx.letterhead, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+  ctx.pageCount += 1;
+  if (!ctx.dry) {
+    ctx.page = ctx.pdf.addPage([PAGE_W, PAGE_H]);
+    ctx.pages.push(ctx.page);
+    if (ctx.letterhead) {
+      ctx.page.drawPage(ctx.letterhead, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+    }
   }
   ctx.y = CONTINUATION_TOP;
 }
 
 function ensure(ctx: Ctx, needed: number): void {
-  if (ctx.y + needed > CONTENT_BOTTOM) startPage(ctx);
+  if (!ctx.dry && ctx.y + needed > CONTENT_BOTTOM) startPage(ctx);
 }
 
 interface TextOpts {
@@ -270,11 +282,14 @@ function text(ctx: Ctx, value: string, x: number, y: number, opts: TextOpts = {}
   let tx = x;
   if (opts.align === "right") tx = x + (opts.width ?? 0) - w;
   else if (opts.align === "center") tx = x + ((opts.width ?? 0) - w) / 2;
-  ctx.page.drawText(body, { x: tx, y: PAGE_H - y, size, font, color: opts.color ?? BLACK });
+  if (!ctx.dry) {
+    ctx.page.drawText(body, { x: tx, y: PAGE_H - y, size, font, color: opts.color ?? BLACK });
+  }
   return tx + w;
 }
 
 function hRule(ctx: Ctx, x1: number, x2: number, y: number, thickness = 0.5): void {
+  if (ctx.dry) return;
   ctx.page.drawLine({
     start: { x: x1, y: PAGE_H - y },
     end: { x: x2, y: PAGE_H - y },
@@ -284,6 +299,7 @@ function hRule(ctx: Ctx, x1: number, x2: number, y: number, thickness = 0.5): vo
 }
 
 function vRule(ctx: Ctx, x: number, y1: number, y2: number, thickness = 0.5): void {
+  if (ctx.dry) return;
   ctx.page.drawLine({
     start: { x, y: PAGE_H - y1 },
     end: { x, y: PAGE_H - y2 },
@@ -332,14 +348,16 @@ interface Cell {
 }
 
 function tableRow(ctx: Ctx, top: number, height: number, cells: Cell[], descLines?: string[]): void {
-  ctx.page.drawRectangle({
-    x: TABLE_X,
-    y: PAGE_H - (top + height),
-    width: TABLE_W,
-    height,
-    borderColor: LINE,
-    borderWidth: 0.5,
-  });
+  if (!ctx.dry) {
+    ctx.page.drawRectangle({
+      x: TABLE_X,
+      y: PAGE_H - (top + height),
+      width: TABLE_W,
+      height,
+      borderColor: LINE,
+      borderWidth: 0.5,
+    });
+  }
   for (const cell of cells) {
     if (cell.x > TABLE_X) vRule(ctx, cell.x, top, top + height);
   }
@@ -366,14 +384,16 @@ function tableRow(ctx: Ctx, top: number, height: number, cells: Cell[], descLine
 function tableHeader(ctx: Ctx): void {
   ensure(ctx, HEADER_H + ROW_H);
   const top = ctx.y;
-  ctx.page.drawRectangle({
-    x: TABLE_X,
-    y: PAGE_H - (top + HEADER_H),
-    width: TABLE_W,
-    height: HEADER_H,
-    borderColor: LINE,
-    borderWidth: 0.5,
-  });
+  if (!ctx.dry) {
+    ctx.page.drawRectangle({
+      x: TABLE_X,
+      y: PAGE_H - (top + HEADER_H),
+      width: TABLE_W,
+      height: HEADER_H,
+      borderColor: LINE,
+      borderWidth: 0.5,
+    });
+  }
   for (const x of [COLS.desc.x, COLS.uom.x, COLS.width.x, COLS.sheet.x, COLS.rate.x, COLS.total.x]) {
     vRule(ctx, x, top, top + HEADER_H);
   }
@@ -408,30 +428,16 @@ function tableHeader(ctx: Ctx): void {
   ctx.y = top + HEADER_H;
 }
 
-export async function generatePiPdf(
-  po: PoForPi,
-  company: Company,
-  master?: unknown,
-): Promise<Uint8Array> {
-  const cfg = resolvePiDocument(company, master);
-  const pdf = await PDFDocument.create();
-  const letterheadBytes = assetBytes("pi-letterhead.pdf");
-  const [letterhead] = letterheadBytes ? await pdf.embedPdf(letterheadBytes) : [null];
+type PiConfig = ReturnType<typeof resolvePiDocument>;
 
-  const ctx: Ctx = {
-    pdf,
-    page: null as unknown as PDFPage,
-    pages: [],
-    letterhead: letterhead ?? null,
-    font: await pdf.embedFont(StandardFonts.Helvetica),
-    bold: await pdf.embedFont(StandardFonts.HelveticaBold),
-    boldItalic: await pdf.embedFont(StandardFonts.HelveticaBoldOblique),
-    italic: await pdf.embedFont(StandardFonts.HelveticaOblique),
-    y: 0,
-  };
+/**
+ * Lays the whole PI out, `lift` points higher than the master's fixed top
+ * section. Returns the baseline of the last line drawn.
+ */
+function drawPi(ctx: Ctx, po: PoForPi, cfg: PiConfig, lift: number): number {
   startPage(ctx);
 
-  text(ctx, "Proforma Invoice", 0, TITLE_Y, {
+  text(ctx, "Proforma Invoice", 0, TITLE_Y - lift, {
     font: ctx.bold,
     size: TITLE_SIZE,
     align: "center",
@@ -441,22 +447,23 @@ export async function generatePiPdf(
   // The master shows the customer over two lines: trading name, then descriptor.
   const [customerName, ...customerRest] = cfg.customerName.split(",").map((s) => s.trim());
   const customerDescriptor = customerRest.join(", ");
+  const metaRow = META_ROW_Y.map((y) => y - lift);
 
-  sectionHeading(ctx, "Customer Details", 38, META_HEAD_Y);
-  sectionHeading(ctx, "Document Details", DOC_LABEL_X - 7, META_HEAD_Y);
+  sectionHeading(ctx, "Customer Details", 38, META_HEAD_Y - lift);
+  sectionHeading(ctx, "Document Details", DOC_LABEL_X - 7, META_HEAD_Y - lift);
 
-  labelValue(ctx, "Customer Details:", customerName, META_ROW_Y[0], LABEL_X - 3, VALUE_X);
-  if (customerDescriptor) text(ctx, customerDescriptor, VALUE_X, META_ROW_Y[1], {});
-  labelValue(ctx, "Customer TRN:", cfg.customerTrn, META_ROW_Y[3], LABEL_X - 3, VALUE_X);
+  labelValue(ctx, "Customer Details:", customerName, metaRow[0], LABEL_X - 3, VALUE_X);
+  if (customerDescriptor) text(ctx, customerDescriptor, VALUE_X, metaRow[1], {});
+  labelValue(ctx, "Customer TRN:", cfg.customerTrn, metaRow[3], LABEL_X - 3, VALUE_X);
   const projectName = `PO ${po.poNo}${po.portOfDest ? ` - ${po.portOfDest} Port` : ""}`;
-  labelValue(ctx, "Project Name:", projectName, META_ROW_Y[4], LABEL_X, VALUE_X);
+  labelValue(ctx, "Project Name:", projectName, metaRow[4], LABEL_X, VALUE_X);
 
-  labelValue(ctx, "PI Number", po.piNo || "", META_ROW_Y[0], DOC_LABEL_X, DOC_VALUE_X);
-  labelValue(ctx, "Date:", fmtPiDate(po.piDate), META_ROW_Y[1], DOC_LABEL_X, DOC_VALUE_X);
-  labelValue(ctx, "Currency:", cfg.currency, META_ROW_Y[2], DOC_LABEL_X, DOC_VALUE_X);
-  labelValue(ctx, "Sales Person:", cfg.salesPerson, META_ROW_Y[3], DOC_LABEL_X, DOC_VALUE_X);
+  labelValue(ctx, "PI Number", po.piNo || "", metaRow[0], DOC_LABEL_X, DOC_VALUE_X);
+  labelValue(ctx, "Date:", fmtPiDate(po.piDate), metaRow[1], DOC_LABEL_X, DOC_VALUE_X);
+  labelValue(ctx, "Currency:", cfg.currency, metaRow[2], DOC_LABEL_X, DOC_VALUE_X);
+  labelValue(ctx, "Sales Person:", cfg.salesPerson, metaRow[3], DOC_LABEL_X, DOC_VALUE_X);
 
-  ctx.y = TABLE_TOP;
+  ctx.y = TABLE_TOP - lift;
   tableHeader(ctx);
 
   // Product family banner: one cell spanning description through total amount.
@@ -470,7 +477,7 @@ export async function generatePiPdf(
   let totalM2 = 0;
   let grossTotal = 0;
   const bodyTop = ctx.y;
-  const bodyPage = ctx.pages.length;
+  const bodyPage = ctx.pageCount;
 
   for (const [idx, line] of po.lines.entries()) {
     const total = lineTotal(line);
@@ -482,11 +489,11 @@ export async function generatePiPdf(
 
     const descLines = wrapText(lineDescription(line), ctx.font, TABLE_SIZE, COLS.desc.w - CELL_PAD * 2);
     let rowH = Math.max(ROW_H, descLines.length * 9 + 3);
-    if (ctx.y + rowH > CONTENT_BOTTOM) {
+    if (!ctx.dry && ctx.y + rowH > CONTENT_BOTTOM) {
       startPage(ctx);
       tableHeader(ctx);
     }
-    if (idx === po.lines.length - 1 && ctx.pages.length === bodyPage) {
+    if (idx === po.lines.length - 1 && ctx.pageCount === bodyPage) {
       rowH = Math.max(rowH, bodyTop + MIN_ITEM_BODY_H - ctx.y);
     }
     tableRow(
@@ -524,8 +531,10 @@ export async function generatePiPdf(
     ctx.y += rowH;
   }
 
-  const netTotal = po.piValue != null ? Number(po.piValue) : grossTotal;
-  if (ctx.y + ROW_H * 2 > CONTENT_BOTTOM) {
+  // A PI header value of 0 means "not priced yet", not a free order.
+  const piValue = Number(po.piValue);
+  const netTotal = piValue > 0 ? piValue : grossTotal;
+  if (!ctx.dry && ctx.y + ROW_H * 2 > CONTENT_BOTTOM) {
     startPage(ctx);
     tableHeader(ctx);
   }
@@ -623,6 +632,42 @@ export async function generatePiPdf(
   ctx.y += 33.5;
   text(ctx, "Authorised Representative", 48, ctx.y, {});
   text(ctx, "Authorised Representative", SIGN_RIGHT_X, ctx.y, {});
+  return ctx.y;
+}
+
+export async function generatePiPdf(
+  po: PoForPi,
+  company: Company,
+  master?: unknown,
+): Promise<Uint8Array> {
+  const cfg = resolvePiDocument(company, master);
+  const pdf = await PDFDocument.create();
+  const letterheadBytes = assetBytes("pi-letterhead.pdf");
+  const [letterhead] = letterheadBytes ? await pdf.embedPdf(letterheadBytes) : [null];
+
+  const ctx: Ctx = {
+    pdf,
+    page: null as unknown as PDFPage,
+    pages: [],
+    letterhead: letterhead ?? null,
+    font: await pdf.embedFont(StandardFonts.Helvetica),
+    bold: await pdf.embedFont(StandardFonts.HelveticaBold),
+    boldItalic: await pdf.embedFont(StandardFonts.HelveticaBoldOblique),
+    italic: await pdf.embedFont(StandardFonts.HelveticaOblique),
+    y: 0,
+    dry: true,
+    pageCount: 0,
+  };
+
+  // Measure the document unbroken, then close the gap under the letterhead by
+  // however much it overruns, so anything that can be one page stays one page.
+  const measuredBottom = drawPi(ctx, po, cfg, 0);
+  const lift = Math.min(MAX_TOP_LIFT, Math.max(0, Math.ceil(measuredBottom - CONTENT_BOTTOM)));
+
+  ctx.dry = false;
+  ctx.pageCount = 0;
+  ctx.y = 0;
+  drawPi(ctx, po, cfg, lift);
 
   const totalPages = ctx.pages.length;
   ctx.pages.forEach((page, i) => {
