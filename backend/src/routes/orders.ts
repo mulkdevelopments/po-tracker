@@ -20,7 +20,7 @@ import { parseCompany } from "../companies.js";
 import { nextCiNo, nextPiNo } from "../docNumbers.js";
 import { generatePiPdf } from "../piPdf.js";
 import { generateCiExcel } from "../ciExcel.js";
-import { completeLineMath, fillHeaderTotals, missingHeaderTotals } from "../lineMath.js";
+import { balanceDueFromCi, completeLineMath, fillHeaderTotals, missingHeaderTotals } from "../lineMath.js";
 import { escapeHtml, isEmailConfigured, parseEmailList, sendMail } from "../email.js";
 import {
   DEFAULT_LEAD_TIMES,
@@ -204,6 +204,22 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
+const CI_CHARGE_FIELDS = ["ciValue", "freight", "inland"] as const;
+
+/**
+ * Balance due is CI net + freight + inland, so recompute it whenever a write
+ * touches one of those charges — whatever the client sent for it is ignored.
+ */
+function withBalanceDue(
+  poData: Record<string, unknown>,
+  existing?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (!CI_CHARGE_FIELDS.some((k) => k in poData)) return poData;
+  const balanceDue = balanceDueFromCi({ ...existing, ...poData });
+  if (balanceDue == null) return poData;
+  return { ...poData, balanceDue };
+}
+
 /** Strip null resubmit counts — Prisma Int fields cannot be set to null. */
 function poCreateData(
   poData: Record<string, unknown>,
@@ -213,7 +229,7 @@ function poCreateData(
 ): Prisma.PurchaseOrderCreateInput {
   const completed = lines.map((l) => completeLineMath(l, sheetsPerSkid));
   return {
-    ...(fillHeaderTotals(poData, completed) as Prisma.PurchaseOrderUncheckedCreateInput),
+    ...(fillHeaderTotals(withBalanceDue(poData), completed) as Prisma.PurchaseOrderUncheckedCreateInput),
     company,
     lines: { create: completed },
   };
@@ -661,8 +677,9 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
 
   const { lines, ...poData } = parsed.data;
   const perSkid = await sheetsPerSkidFor(company);
+  const headerData = withBalanceDue(poData, existing as unknown as Record<string, unknown>);
   await prisma.$transaction(async (tx) => {
-    await tx.purchaseOrder.update({ where: { id }, data: poUpdateData(poData) });
+    await tx.purchaseOrder.update({ where: { id }, data: poUpdateData(headerData) });
     if (lines) {
       await syncPoLines(tx, id, lines, perSkid);
       await backfillHeaderTotals(tx, id, poData);
@@ -913,7 +930,10 @@ router.post("/:id/advance", requireAuth, requirePage("orders"), requireStageAdva
   if (!fieldParsed.success) {
     return res.status(400).json({ error: fieldParsed.error.flatten() });
   }
-  const updateData: Record<string, unknown> = { ...fieldParsed.data };
+  const updateData: Record<string, unknown> = withBalanceDue(
+    { ...fieldParsed.data },
+    po as unknown as Record<string, unknown>,
+  );
   const merged = { ...po, ...fieldParsed.data };
   updateData.status = deriveStatusFromFields(merged, company);
 

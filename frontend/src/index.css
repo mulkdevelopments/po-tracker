@@ -590,6 +590,12 @@ button.pipeline-checklist-item {
   font-size: 14px;
 }
 
+@media (min-width: 640px) {
+  .po-drawer-section-wide .po-drawer-section-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 .po-drawer-history {
   list-style: none;
   margin: 0;

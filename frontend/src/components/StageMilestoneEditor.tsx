@@ -12,6 +12,7 @@ import {
 import { autoShippingUrl } from "../shippingTracking";
 import { getStageFieldDefs, STAGE_MILESTONE_KEYS, type StageFieldDef } from "../stageMilestones";
 import { notifyPoUpdated } from "../poEvents";
+import { expectedBalanceDue } from "../paymentFlags";
 import { derivedPlanningDate } from "../productionSchedule";
 
 function toStr(v: unknown): string {
@@ -19,10 +20,17 @@ function toStr(v: unknown): string {
   return String(v);
 }
 
+// Charges that make up the balance due, which is derived rather than typed.
+const CI_CHARGE_KEYS = new Set(["ciValue", "freight", "inland"]);
+
 function loadFields(po: PurchaseOrder, defs: StageFieldDef[]): Record<string, string> {
   const rec = po as unknown as Record<string, unknown>;
   const out: Record<string, string> = {};
   for (const f of defs) out[f.k] = toStr(rec[f.k]);
+  if ("balanceDue" in out) {
+    const due = expectedBalanceDue(out);
+    out.balanceDue = due == null ? "" : String(due);
+  }
   return out;
 }
 
@@ -81,6 +89,10 @@ export default function StageMilestoneEditor({
   const setField = (key: string, value: string) => {
     setFields((prev) => {
       const next = { ...prev, [key]: value };
+      if (CI_CHARGE_KEYS.has(key)) {
+        const due = expectedBalanceDue(next);
+        next.balanceDue = due == null ? "" : String(due);
+      }
       if (stageId === "BL" && (key === "bol" || key === "shippingLine")) {
         return applyBlTrackingUrl(next);
       }
@@ -210,6 +222,14 @@ export default function StageMilestoneEditor({
                       </option>
                     ))}
                   </select>
+                ) : f.auto ? (
+                  <input
+                    type="text"
+                    readOnly
+                    value={fields[f.k] ?? ""}
+                    className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-700"
+                    title="CI value (net) + freight + inland"
+                  />
                 ) : (
                   <input
                     type={

@@ -50,6 +50,7 @@ import PiEmailQueue from "./PiEmailQueue";
 import {
   balancePaymentFlag,
   downpaymentFlag,
+  expectedBalanceDue,
   paymentTolerance,
   resolveGrossInvoiceValue,
   sumLineExtInv,
@@ -104,6 +105,9 @@ const MILESTONE_KEYS = new Set([
   "revisionSent", "bol", "shippingLine", "shippingUrl", "bpDate", "bpAmount", "telexDate", "arrivalDate",
 ]);
 
+// Charges that make up the balance due, which is derived rather than typed.
+const CI_CHARGE_KEYS = new Set(["ciValue", "freight", "inland"]);
+
 function deriveStatus(f: Record<string, string>, company: WorkflowCompany): string {
   return deriveStatusFromFields(f, company);
 }
@@ -121,14 +125,16 @@ function Section({
   title,
   children,
   tone,
+  wide,
 }: {
   title: string;
   children: React.ReactNode;
   tone?: "under" | "over" | null;
+  wide?: boolean;
 }) {
   const toneClass = tone === "under" ? "pay-under" : tone === "over" ? "pay-over" : "";
   return (
-    <div className={`po-drawer-section ${toneClass}`}>
+    <div className={`po-drawer-section ${toneClass}${wide ? " po-drawer-section-wide sm:col-span-2" : ""}`}>
       <div className="po-drawer-section-title">{title}</div>
       <div className="po-drawer-section-grid">{children}</div>
     </div>
@@ -229,6 +235,10 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     setForm((prev) => {
       const next = { ...prev, [k]: v };
       if (autoStatus && MILESTONE_KEYS.has(k)) next.status = deriveStatus(next, company);
+      if (CI_CHARGE_KEYS.has(k)) {
+        const due = expectedBalanceDue(next);
+        next.balanceDue = due == null ? "" : String(due);
+      }
       return next;
     });
   };
@@ -520,6 +530,14 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                             </label>
                           )}
                         </>
+                      ) : fld.k === "balanceDue" ? (
+                        <input
+                          type="text"
+                          readOnly
+                          value={form.balanceDue ?? ""}
+                          className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-600"
+                          title="CI value (net) + freight + inland"
+                        />
                       ) : (
                         <input
                           type={fld.type === "number" ? "number" : fld.type === "date" ? "date" : "text"}
@@ -871,24 +889,29 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                     </div>
                   )}
                 </Section>
-                <Section title="Production">
+                <Section title="Production & shipping" wide>
                   <Field label="Site" val={po.productionSite} />
                   <Field label="Start" val={po.productionStart} />
                   <Field label="ETC" val={po.productionEtc} />
                   <Field label="Complete" val={po.productionComplete} />
-                  {po.productionNotes && (
-                    <div className="col-span-2">
-                      <Field label="Quality notes" val={po.productionNotes} />
-                    </div>
-                  )}
-                </Section>
-                <Section title="Container & shipping">
                   <Field label="Container #" val={po.containerNo} />
                   <Field label="ETD" val={po.actualDeparture} />
                   <Field label="ETA" val={po.shippingEta} />
                   <Field label="ISF" val={po.isf} />
+                  {po.productionNotes && (
+                    <div className="col-span-2 sm:col-span-4">
+                      <Field label="Quality notes" val={po.productionNotes} />
+                    </div>
+                  )}
                 </Section>
-                <Section title="Bill of lading">
+                <Section title="Commercial invoice & bill of lading" wide>
+                  <Field label="CI #" val={po.ciNo} />
+                  <Field label="CI date" val={po.ciDate} />
+                  <Field label="Freight" val={fmtMoney(po.freight)} />
+                  <Field label="Inland" val={fmtMoney(po.inland)} />
+                  <Field label="CI value" val={fmtMoney(po.ciValue)} />
+                  <Field label="Balance due" val={fmtMoney(po.balanceDue)} />
+                  <Field label="CI approved" val={po.ciApprovedDate ? fmtDate(po.ciApprovedDate) : null} />
                   <Field label="BOL / SWBOL" val={po.bol} />
                   <Field label="Shipping line" val={po.shippingLine} />
                   <Field
@@ -906,23 +929,15 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       ) : null
                     }
                   />
-                </Section>
-                <Section title="Commercial invoice">
-                  <Field label="CI #" val={po.ciNo} />
-                  <Field label="CI date" val={po.ciDate} />
-                  <Field label="Freight" val={fmtMoney(po.freight)} />
-                  <Field label="Inland" val={fmtMoney(po.inland)} />
-                  <Field label="CI value" val={fmtMoney(po.ciValue)} />
-                  <Field label="Balance due" val={fmtMoney(po.balanceDue)} />
-                  <Field label="CI approved" val={po.ciApprovedDate ? fmtDate(po.ciApprovedDate) : null} />
                   {po.ciNo && (
-                    <div className="col-span-2 mt-1">
+                    <div className="col-span-2 sm:col-span-4 mt-1">
                       <CiExcelDownload poId={po.id} />
                     </div>
                   )}
                 </Section>
                 <Section
                   title="Balance payment"
+                  wide
                   tone={bpPayFlag && bpPayFlag.kind !== "ok" ? bpPayFlag.kind : null}
                 >
                   <Field label="BP date" val={po.bpDate} />
@@ -1174,10 +1189,8 @@ function buildInitialAdvanceFields(
     if (!out.ciDate) out.ciDate = todayISO();
     if (!out.ciValue && po.piValue != null) out.ciValue = String(po.piValue);
     else if (!out.ciValue && po.poValue != null) out.ciValue = String(po.poValue);
-    if (!out.balanceDue && po.balanceDue != null) out.balanceDue = String(po.balanceDue);
-    else if (!out.balanceDue && out.ciValue && po.dpAmount != null) {
-      out.balanceDue = String(Math.round((Number(out.ciValue) - Number(po.dpAmount)) * 100) / 100);
-    }
+    const due = expectedBalanceDue(out);
+    out.balanceDue = due == null ? "" : String(due);
   }
   if (nextStage === "CI approved") {
     if (!out.ciApprovedDate) out.ciApprovedDate = todayISO();
@@ -1236,18 +1249,21 @@ function AdvanceButton({
     return url ? { ...draft, shippingUrl: url } : draft;
   };
 
-  const updateBlField = (key: string, value: string) => {
+  const updateDialogField = (key: string, value: string) => {
     setFields((prev) => {
       const next = { ...prev, [key]: value };
-      if (nextStage !== "BL") return next;
-      if (key === "bol" || key === "shippingLine") {
+      if (CI_CHARGE_KEYS.has(key)) {
+        const due = expectedBalanceDue(next);
+        next.balanceDue = due == null ? "" : String(due);
+      }
+      if (nextStage === "BL" && (key === "bol" || key === "shippingLine")) {
         return applyBlTrackingUrl(next, shippingLines);
       }
       return next;
     });
   };
 
-  const stageFieldDefs: Record<string, { k: string; label: string; type: string; options?: string[]; def?: string | number; autoNo?: boolean; autoDate?: boolean }[]> = {
+  const stageFieldDefs: Record<string, { k: string; label: string; type: string; options?: string[]; def?: string | number; autoNo?: boolean; autoDate?: boolean; auto?: boolean }[]> = {
     Planning: [
       { k: "planningDate", label: "Planning date", type: "date", autoDate: true },
       { k: "productionSite", label: "Production site", type: "select", options: master.uaeSites || [] },
@@ -1294,7 +1310,7 @@ function AdvanceButton({
       { k: "freight", label: "Freight", type: "number" },
       { k: "inland", label: "Inland", type: "number" },
       { k: "ciValue", label: "CI Value (USD)", type: "number" },
-      { k: "balanceDue", label: "Balance due (USD)", type: "number" },
+      { k: "balanceDue", label: "Balance due (USD)", type: "number", auto: true },
     ],
     "CI approved": [
       { k: "ciApprovedDate", label: "Approval Date", type: "date", autoDate: true },
@@ -1491,11 +1507,7 @@ function AdvanceButton({
                 <select
                   className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
                   value={fields[f.k] ?? ""}
-                  onChange={(e) =>
-                    nextStage === "BL" && f.k === "shippingLine"
-                      ? updateBlField(f.k, e.target.value)
-                      : setFields({ ...fields, [f.k]: e.target.value })
-                  }
+                  onChange={(e) => updateDialogField(f.k, e.target.value)}
                 >
                   <option value="">—</option>
                   {(nextStage === "BL" && f.k === "shippingLine"
@@ -1515,16 +1527,20 @@ function AdvanceButton({
                   className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-700"
                   title="Set to today's date"
                 />
+              ) : f.auto ? (
+                <input
+                  type="text"
+                  readOnly
+                  value={fields[f.k] ?? ""}
+                  className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-700"
+                  title="CI value (net) + freight + inland"
+                />
               ) : (
                 <input
                   type={f.type}
                   className={`w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm ${f.autoNo ? "font-mono bg-slate-50" : ""} ${nextStage === "BL" && f.k === "shippingUrl" ? "font-mono text-xs" : ""}`}
                   value={fields[f.k] ?? ""}
-                  onChange={(e) =>
-                    nextStage === "BL" && (f.k === "bol" || f.k === "shippingLine")
-                      ? updateBlField(f.k, e.target.value)
-                      : setFields({ ...fields, [f.k]: e.target.value })
-                  }
+                  onChange={(e) => updateDialogField(f.k, e.target.value)}
                 />
               )}
             </div>

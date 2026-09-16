@@ -176,3 +176,22 @@ export function fillHeaderTotals<T extends Record<string, unknown>>(
 ): T {
   return { ...poData, ...missingHeaderTotals(poData, lines) };
 }
+
+export type CiCharges = {
+  ciValue?: unknown;
+  freight?: unknown;
+  inland?: unknown;
+};
+
+/**
+ * The customer is billed the net commercial invoice plus the freight and inland
+ * haulage charged with it, so balance due is derived rather than typed.
+ */
+export function balanceDueFromCi(po: CiCharges): number | null {
+  const ciValue = num(po.ciValue);
+  if (ciValue == null) return null;
+  // A zeroed invoice is how the tracker marks a superseded revision: nothing is due,
+  // even though the container's freight and inland figures are still on the row.
+  if (ciValue === 0) return 0;
+  return round(ciValue + (num(po.freight) ?? 0) + (num(po.inland) ?? 0), 2);
+}

@@ -74,6 +74,30 @@ export function downpaymentFlag(
   );
 }
 
+type MoneyInput = number | string | null | undefined;
+
+/**
+ * Balance due = commercial invoice (net) + freight + inland. Accepts form
+ * strings so the edit screens can show the figure while it is being typed.
+ */
+export function expectedBalanceDue(charges: {
+  ciValue?: MoneyInput;
+  freight?: MoneyInput;
+  inland?: MoneyInput;
+}): number | null {
+  const money = (v: MoneyInput) => {
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const ciValue = money(charges.ciValue);
+  if (ciValue == null) return null;
+  // A zeroed invoice marks a superseded revision — nothing is due on it.
+  if (ciValue === 0) return 0;
+  const total = ciValue + (money(charges.freight) ?? 0) + (money(charges.inland) ?? 0);
+  return Math.round(total * 100) / 100;
+}
+
 /** Flag balance payment once BP amount is recorded */
 export function balancePaymentFlag(
   po: Pick<PurchaseOrder, "bpAmount" | "bpDate" | "balanceDue">,

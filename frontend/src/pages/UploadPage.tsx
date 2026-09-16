@@ -28,6 +28,7 @@ import {
   linePriceMismatches,
   poTotalMismatch,
 } from "../priceCompare";
+import { expectedBalanceDue } from "../paymentFlags";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -47,7 +48,9 @@ type SynergyBatchItem = {
 
 // Header fields computed automatically on upload — shown read-only to cut manual entry.
 // poValue is priced from our table; the customer's own total is kept in custPoTotal for comparison.
-const AUTO_FIELDS = new Set(["siNo", "concat", "poValue", "piValue", "grossInvoiceValue", "totalM2", "skids", "status"]);
+const AUTO_FIELDS = new Set([
+  "siNo", "concat", "poValue", "piValue", "grossInvoiceValue", "totalM2", "skids", "status", "balanceDue",
+]);
 
 const toStr = (v: unknown) => (v == null ? "" : String(v));
 
@@ -281,6 +284,12 @@ export default function UploadPage() {
     totals.totalM2,
     totals.skids,
   ]);
+
+  // Balance due is the CI net plus the charges invoiced with it.
+  useEffect(() => {
+    const due = expectedBalanceDue(form);
+    setForm((f) => ({ ...f, balanceDue: due == null ? "" : String(due) }));
+  }, [form.ciValue, form.freight, form.inland]);
 
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {

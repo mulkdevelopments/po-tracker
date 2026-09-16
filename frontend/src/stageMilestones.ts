@@ -8,6 +8,8 @@ export type StageFieldDef = {
   def?: string | number;
   autoNo?: boolean;
   autoDate?: boolean;
+  /** Computed from other fields — shown read-only and left to the API to fill. */
+  auto?: boolean;
 };
 
 /** Milestone fields shown when recording / editing a pipeline step */
@@ -61,7 +63,8 @@ export function getStageFieldDefs(master: MasterData): Record<string, StageField
       { k: "freight", label: "Freight", type: "number" },
       { k: "inland", label: "Inland", type: "number" },
       { k: "ciValue", label: "CI Value (USD)", type: "number" },
-      { k: "balanceDue", label: "Balance due (USD)", type: "number" },
+      // CI net + freight + inland (computed on save).
+      { k: "balanceDue", label: "Balance due (USD)", type: "number", auto: true },
     ],
     "CI approved": [
       { k: "ciApprovedDate", label: "Approval Date", type: "date", autoDate: true },
