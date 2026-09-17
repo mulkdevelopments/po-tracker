@@ -204,6 +204,15 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * A document is filed under its own number — NX/PI/26/06/1087 becomes
+ * NX-PI-26-06-1087.pdf, since a filename cannot carry the separators.
+ */
+function docFileName(docNo: string, ext: string): string {
+  const name = docNo.trim().replace(/[/\\?%*:|"<>]+/g, "-").replace(/^-+|-+$/g, "");
+  return `${name}.${ext}`;
+}
+
 const CI_CHARGE_FIELDS = ["ciValue", "freight", "inland"] as const;
 
 /**
@@ -426,9 +435,8 @@ router.get("/:id/pi-pdf", requireAuth, requirePage("orders"), async (req, res) =
   }
   const settings = await prisma.appSettings.findUnique({ where: { company } });
   const pdfBytes = await generatePiPdf(po, company, settings?.master);
-  const safeName = po.piNo.replace(/[/\\?%*:|"<>]/g, "-");
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="PI-${safeName}.pdf"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${docFileName(po.piNo, "pdf")}"`);
   res.send(Buffer.from(pdfBytes));
 });
 
@@ -469,7 +477,6 @@ router.post("/:id/email-pi", requireAuth, requirePage("orders"), requirePoEdit, 
   }
 
   const pdfBytes = await generatePiPdf(po, company, settings?.master);
-  const safeName = po.piNo.replace(/[/\\?%*:|"<>]/g, "-");
   const start = po.productionStart || po.productionBegin || null;
   const result = await sendMail({
     to: recipients,
@@ -484,7 +491,7 @@ router.post("/:id/email-pi", requireAuth, requirePage("orders"), requirePoEdit, 
       `<p>PI date: ${escapeHtml(po.piDate)}<br/>Approved: ${escapeHtml(po.piApprovedDate)}<br/>` +
       `Planned production start: ${escapeHtml(start)}<br/>` +
       `Stocking location: ${escapeHtml(po.stockingLocation)}</p>`,
-    attachments: [{ filename: `PI-${safeName}.pdf`, content: Buffer.from(pdfBytes) }],
+    attachments: [{ filename: docFileName(po.piNo, "pdf"), content: Buffer.from(pdfBytes) }],
   });
 
   if (!result.sent) return res.status(502).json({ error: result.reason });
