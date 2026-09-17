@@ -43,6 +43,18 @@ function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+/**
+ * A downloaded document is filed under its own number, which the API sends in
+ * Content-Disposition. Deriving it from the number we already hold covers the
+ * case where the browser will not hand that header over.
+ */
+function downloadName(res: Response, docNo: string | null | undefined, ext: string, fallback: string) {
+  const sent = res.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/)?.[1];
+  if (sent) return sent;
+  const name = (docNo ?? "").trim().replace(/[/\\?%*:|"<>]+/g, "-").replace(/^-+|-+$/g, "");
+  return name ? `${name}.${ext}` : fallback;
+}
+
 export function setToken(token: string | null) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
@@ -211,7 +223,7 @@ export const api = {
       { method: "POST", body: JSON.stringify({}) },
     ),
 
-  downloadPiPdf: async (id: number) => {
+  downloadPiPdf: async (id: number, piNo?: string | null) => {
     const token = getToken();
     const res = await fetch(`${API_BASE}/api/orders/${id}/pi-pdf${companyParam()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -222,9 +234,7 @@ export const api = {
       throw new Error(err.error || "Failed to download PI PDF");
     }
     const blob = await res.blob();
-    const cd = res.headers.get("Content-Disposition");
-    const match = cd?.match(/filename=\"?([^\";]+)\"?/);
-    const filename = match?.[1] || "PI.pdf";
+    const filename = downloadName(res, piNo, "pdf", "PI.pdf");
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -233,7 +243,7 @@ export const api = {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
-  downloadCiExcel: async (id: number) => {
+  downloadCiExcel: async (id: number, ciNo?: string | null) => {
     const token = getToken();
     const res = await fetch(`${API_BASE}/api/orders/${id}/ci-excel${companyParam()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -244,9 +254,7 @@ export const api = {
       throw new Error(err.error || "Failed to download CI Excel");
     }
     const blob = await res.blob();
-    const cd = res.headers.get("Content-Disposition");
-    const match = cd?.match(/filename=\"?([^\";]+)\"?/);
-    const filename = match?.[1] || "CI.xlsx";
+    const filename = downloadName(res, ciNo, "xlsx", "CI.xlsx");
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

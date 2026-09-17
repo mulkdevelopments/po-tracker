@@ -870,7 +870,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
                   {po.piNo && (
                     <div className="col-span-2 mt-1 flex flex-wrap gap-2">
-                      <PiPdfDownload poId={po.id} />
+                      <PiPdfDownload poId={po.id} piNo={po.piNo} />
                     </div>
                   )}
                 </Section>
@@ -931,7 +931,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   />
                   {po.ciNo && (
                     <div className="col-span-2 sm:col-span-4 mt-1">
-                      <CiExcelDownload poId={po.id} />
+                      <CiExcelDownload poId={po.id} ciNo={po.ciNo} />
                     </div>
                   )}
                 </Section>
@@ -1895,13 +1895,13 @@ function ResubmitCiButton({
   );
 }
 
-function PiPdfDownload({ poId }: { poId: number }) {
+function PiPdfDownload({ poId, piNo }: { poId: number; piNo?: string | null }) {
   const [loading, setLoading] = useState(false);
 
   const download = async () => {
     setLoading(true);
     try {
-      await api.downloadPiPdf(poId);
+      await api.downloadPiPdf(poId, piNo);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to download PI PDF");
     } finally {
@@ -1921,13 +1921,13 @@ function PiPdfDownload({ poId }: { poId: number }) {
   );
 }
 
-function CiExcelDownload({ poId }: { poId: number }) {
+function CiExcelDownload({ poId, ciNo }: { poId: number; ciNo?: string | null }) {
   const [loading, setLoading] = useState(false);
 
   const download = async () => {
     setLoading(true);
     try {
-      await api.downloadCiExcel(poId);
+      await api.downloadCiExcel(poId, ciNo);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to download CI Excel");
     } finally {

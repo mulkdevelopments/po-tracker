@@ -50,6 +50,9 @@ app.use(
       return cb(null, ok);
     },
     credentials: true,
+    // Downloads are named after the document (PI / CI number) in this header, which
+    // a browser withholds from a cross-origin fetch unless it is exposed.
+    exposedHeaders: ["Content-Disposition"],
   }),
 );
 app.use(express.json({ limit: "10mb" }));
