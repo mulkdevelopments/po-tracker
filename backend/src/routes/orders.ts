@@ -205,12 +205,25 @@ function todayISO() {
 }
 
 /**
- * A document is filed under its own number — NX/PI/26/06/1087 becomes
- * NX-PI-26-06-1087.pdf, since a filename cannot carry the separators.
+ * A document is filed under its own number — EBT/2026/08/254 becomes
+ * EBT-2026-08-254, since a filename cannot carry the separators.
  */
 function docFileName(docNo: string, ext: string): string {
   const name = docNo.trim().replace(/[/\\?%*:|"<>]+/g, "-").replace(/^-+|-+$/g, "");
   return `${name}.${ext}`;
+}
+
+/**
+ * A proforma invoice is filed as PI-<serial>-<PO>: NX/PI/26/06/1087 raised
+ * against PO 52952099 becomes PI-1087-52952099.pdf. The serial is the part
+ * anyone quotes, and the PO number is what the file is looked up by later.
+ */
+function piFileName(piNo: string, poNo: string): string {
+  const parts = piNo.split(/[^0-9A-Za-z]+/).filter(Boolean);
+  const last = parts[parts.length - 1];
+  // A number that does not end in a serial keeps all of itself, so nothing is lost.
+  const serial = last && /^\d+$/.test(last) ? last : parts.join("-");
+  return docFileName(`PI-${serial}-${poNo}`, "pdf");
 }
 
 const CI_CHARGE_FIELDS = ["ciValue", "freight", "inland"] as const;
@@ -436,7 +449,7 @@ router.get("/:id/pi-pdf", requireAuth, requirePage("orders"), async (req, res) =
   const settings = await prisma.appSettings.findUnique({ where: { company } });
   const pdfBytes = await generatePiPdf(po, company, settings?.master);
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="${docFileName(po.piNo, "pdf")}"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${piFileName(po.piNo, po.poNo)}"`);
   res.send(Buffer.from(pdfBytes));
 });
 
@@ -491,7 +504,7 @@ router.post("/:id/email-pi", requireAuth, requirePage("orders"), requirePoEdit, 
       `<p>PI date: ${escapeHtml(po.piDate)}<br/>Approved: ${escapeHtml(po.piApprovedDate)}<br/>` +
       `Planned production start: ${escapeHtml(start)}<br/>` +
       `Stocking location: ${escapeHtml(po.stockingLocation)}</p>`,
-    attachments: [{ filename: docFileName(po.piNo, "pdf"), content: Buffer.from(pdfBytes) }],
+    attachments: [{ filename: piFileName(po.piNo, po.poNo), content: Buffer.from(pdfBytes) }],
   });
 
   if (!result.sent) return res.status(502).json({ error: result.reason });

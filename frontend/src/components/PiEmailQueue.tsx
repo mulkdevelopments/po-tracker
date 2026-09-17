@@ -52,7 +52,7 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
   const downloadPdf = async () => {
     setBusy(true);
     try {
-      await api.downloadPiPdf(po.id, po.piNo);
+      await api.downloadPiPdf(po.id, { piNo: po.piNo, poNo: po.poNo });
     } catch (e) {
       alert(e instanceof Error ? e.message : "PDF download failed");
     } finally {

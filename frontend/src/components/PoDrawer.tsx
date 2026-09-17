@@ -870,7 +870,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
                   {po.piNo && (
                     <div className="col-span-2 mt-1 flex flex-wrap gap-2">
-                      <PiPdfDownload poId={po.id} piNo={po.piNo} />
+                      <PiPdfDownload poId={po.id} piNo={po.piNo} poNo={po.poNo} />
                     </div>
                   )}
                 </Section>
@@ -1895,13 +1895,13 @@ function ResubmitCiButton({
   );
 }
 
-function PiPdfDownload({ poId, piNo }: { poId: number; piNo?: string | null }) {
+function PiPdfDownload({ poId, piNo, poNo }: { poId: number; piNo?: string | null; poNo?: string | null }) {
   const [loading, setLoading] = useState(false);
 
   const download = async () => {
     setLoading(true);
     try {
-      await api.downloadPiPdf(poId, piNo);
+      await api.downloadPiPdf(poId, { piNo, poNo });
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to download PI PDF");
     } finally {

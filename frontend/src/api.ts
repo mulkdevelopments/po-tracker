@@ -10,6 +10,7 @@ import type {
   PriceListVersionSummary,
 } from "./types";
 import type { Company } from "./companies";
+import { ciFileName, piFileName } from "./docFileNames";
 import {
   STAGE_OWNERS,
   hasReachedProductionComplete,
@@ -44,15 +45,11 @@ function getToken(): string | null {
 }
 
 /**
- * A downloaded document is filed under its own number, which the API sends in
- * Content-Disposition. Deriving it from the number we already hold covers the
- * case where the browser will not hand that header over.
+ * The API names each download in Content-Disposition; the derived name only
+ * stands in when the browser will not hand that header over.
  */
-function downloadName(res: Response, docNo: string | null | undefined, ext: string, fallback: string) {
-  const sent = res.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/)?.[1];
-  if (sent) return sent;
-  const name = (docNo ?? "").trim().replace(/[/\\?%*:|"<>]+/g, "-").replace(/^-+|-+$/g, "");
-  return name ? `${name}.${ext}` : fallback;
+function downloadName(res: Response, derived: string | null, fallback: string) {
+  return res.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/)?.[1] || derived || fallback;
 }
 
 export function setToken(token: string | null) {
@@ -223,7 +220,7 @@ export const api = {
       { method: "POST", body: JSON.stringify({}) },
     ),
 
-  downloadPiPdf: async (id: number, piNo?: string | null) => {
+  downloadPiPdf: async (id: number, doc?: { piNo?: string | null; poNo?: string | null }) => {
     const token = getToken();
     const res = await fetch(`${API_BASE}/api/orders/${id}/pi-pdf${companyParam()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -234,7 +231,7 @@ export const api = {
       throw new Error(err.error || "Failed to download PI PDF");
     }
     const blob = await res.blob();
-    const filename = downloadName(res, piNo, "pdf", "PI.pdf");
+    const filename = downloadName(res, piFileName(doc?.piNo, doc?.poNo), "PI.pdf");
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -254,7 +251,7 @@ export const api = {
       throw new Error(err.error || "Failed to download CI Excel");
     }
     const blob = await res.blob();
-    const filename = downloadName(res, ciNo, "xlsx", "CI.xlsx");
+    const filename = downloadName(res, ciFileName(ciNo), "CI.xlsx");
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
