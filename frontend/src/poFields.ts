@@ -91,7 +91,7 @@ export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       { k: "freight", label: "Freight", type: "number" },
       { k: "inland", label: "Inland", type: "number" },
       { k: "ciValue", label: "Commercial Invoice Value (Net)", type: "number" },
-      { k: "balanceDue", label: "Balance Due (CI net + freight + inland)", type: "number" },
+      { k: "balanceDue", label: "Balance Due", type: "number" },
     ],
   },
   {
