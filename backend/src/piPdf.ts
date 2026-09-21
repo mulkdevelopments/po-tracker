@@ -7,6 +7,7 @@ import {
   rgb,
   type PDFPage,
   type PDFFont,
+  type PDFImage,
   type RGB,
   type PDFEmbeddedPage,
 } from "pdf-lib";
@@ -54,6 +55,9 @@ const DOC_VALUE_X = 459;
 const BANK_LABEL_RIGHT = 366;
 const BANK_VALUE_X = 384;
 const SIGN_RIGHT_X = 294;
+/** Company seal sits over the issuer signature block. */
+const SEAL_SIZE = 72;
+const SEAL_X = 48;
 
 const TITLE_Y = 229.5;
 const META_HEAD_Y = 259;
@@ -238,6 +242,7 @@ interface Ctx {
   page: PDFPage;
   pages: PDFPage[];
   letterhead: PDFEmbeddedPage | null;
+  seal: PDFImage | null;
   font: PDFFont;
   bold: PDFFont;
   boldItalic: PDFFont;
@@ -627,11 +632,29 @@ function drawPi(ctx: Ctx, po: PoForPi, cfg: PiConfig, lift: number): number {
   ensure(ctx, 34);
   const issuerSign = cfg.issuerName.toUpperCase();
   const customerSign = customerName.toUpperCase();
+  const signTop = ctx.y;
   text(ctx, issuerSign, 48, ctx.y, { size: SIGN_SIZE });
   text(ctx, customerSign, SIGN_RIGHT_X, ctx.y, { size: SIGN_SIZE });
   ctx.y += 33.5;
   text(ctx, "Authorised Representative", 48, ctx.y, {});
   text(ctx, "Authorised Representative", SIGN_RIGHT_X, ctx.y, {});
+  // Stamp sits over the issuer block — the gap between the company name and the
+  // authorised-representative line is where a wet seal would land on paper.
+  if (ctx.seal) {
+    const sealTop = signTop + 33.5 / 2 - SEAL_SIZE / 2;
+    if (!ctx.dry) {
+      ctx.page.drawImage(ctx.seal, {
+        x: SEAL_X,
+        y: PAGE_H - sealTop - SEAL_SIZE,
+        width: SEAL_SIZE,
+        height: SEAL_SIZE,
+        opacity: 0.92,
+      });
+    }
+    // Keep the layout's bottom past the seal so the lift pass can still fit a
+    // short PI on one page instead of orphaning the signatures.
+    ctx.y = Math.max(ctx.y, sealTop + SEAL_SIZE);
+  }
   return ctx.y;
 }
 
@@ -643,13 +666,16 @@ export async function generatePiPdf(
   const cfg = resolvePiDocument(company, master);
   const pdf = await PDFDocument.create();
   const letterheadBytes = assetBytes("pi-letterhead.pdf");
+  const sealBytes = assetBytes("pi-seal.png");
   const [letterhead] = letterheadBytes ? await pdf.embedPdf(letterheadBytes) : [null];
+  const seal = sealBytes ? await pdf.embedPng(sealBytes) : null;
 
   const ctx: Ctx = {
     pdf,
     page: null as unknown as PDFPage,
     pages: [],
     letterhead: letterhead ?? null,
+    seal,
     font: await pdf.embedFont(StandardFonts.Helvetica),
     bold: await pdf.embedFont(StandardFonts.HelveticaBold),
     boldItalic: await pdf.embedFont(StandardFonts.HelveticaBoldOblique),

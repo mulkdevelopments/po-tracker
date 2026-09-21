@@ -15,8 +15,9 @@ uploads/
 *.xls
 ~$*
 !docs/**/*.pdf
-# Letterhead the PI generator prints on
+# Letterhead and company seal the PI generator prints on
 !backend/assets/*.pdf
+!backend/assets/*.png
 
 # Vite/TS incremental cache
 *.tsbuildinfo
