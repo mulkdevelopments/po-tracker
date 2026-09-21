@@ -11,6 +11,7 @@ import {
   type WorkflowCompany,
 } from "../workflows";
 import MoneyInput from "./MoneyInput";
+import PiPdfPreview from "./PiPdfPreview";
 import PipelineProgress from "./PipelineProgress";
 import PipelineStepActions from "./PipelineStepActions";
 import StageMilestoneEditor from "./StageMilestoneEditor";
@@ -870,7 +871,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
                   {po.piNo && (
                     <div className="col-span-2 mt-1 flex flex-wrap gap-2">
-                      <PiPdfDownload poId={po.id} piNo={po.piNo} poNo={po.poNo} />
+                      <PiPdfPreview poId={po.id} piNo={po.piNo} poNo={po.poNo} />
                     </div>
                   )}
                 </Section>
@@ -1892,32 +1893,6 @@ function ResubmitCiButton({
       </div>
     </div>
     </ModalPortal>
-  );
-}
-
-function PiPdfDownload({ poId, piNo, poNo }: { poId: number; piNo?: string | null; poNo?: string | null }) {
-  const [loading, setLoading] = useState(false);
-
-  const download = async () => {
-    setLoading(true);
-    try {
-      await api.downloadPiPdf(poId, { piNo, poNo });
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to download PI PDF");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      disabled={loading}
-      onClick={() => void download()}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 disabled:opacity-50"
-    >
-      {loading ? "Preparing…" : "Download PI PDF"}
-    </button>
   );
 }
 

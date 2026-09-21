@@ -4,6 +4,7 @@ import type { AuthUser, MasterData, PurchaseOrder } from "../types";
 import { fmtDate } from "../utils";
 import { buildPiMailto, canMarkPiEmailRole, parsePiInternalEmails } from "../piEmail";
 import { plannedProductionStart } from "../productionSchedule";
+import PiPdfPreview from "./PiPdfPreview";
 
 interface Props {
   po: PurchaseOrder;
@@ -49,17 +50,6 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
     }
   };
 
-  const downloadPdf = async () => {
-    setBusy(true);
-    try {
-      await api.downloadPiPdf(po.id, { piNo: po.piNo, poNo: po.poNo });
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "PDF download failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="px-6 pb-4">
       <div className="rounded-lg border border-sky-200 bg-sky-50 p-4">
@@ -68,7 +58,7 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
             <div className="text-sm font-semibold text-sky-950">Email PI — internal</div>
             <p className="text-xs text-sky-800 mt-0.5">
               {approved
-                ? "Send the approved PI straight from the tracker, or download the PDF and mail it yourself."
+                ? "Preview the approved PI, then send it from the tracker or download and mail it yourself."
                 : "The PI has to be approved before it can be emailed from the tracker."}
             </p>
           </div>
@@ -102,14 +92,13 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void downloadPdf()}
+          <PiPdfPreview
+            poId={po.id}
+            piNo={po.piNo}
+            poNo={po.poNo}
+            label="Preview PI"
             className="px-3 py-1.5 text-xs rounded-md bg-sky-700 text-white hover:bg-sky-800 disabled:opacity-50"
-          >
-            Download PI PDF
-          </button>
+          />
           {emails.length > 0 && approved && (
             <button
               type="button"

@@ -220,7 +220,11 @@ export const api = {
       { method: "POST", body: JSON.stringify({}) },
     ),
 
-  downloadPiPdf: async (id: number, doc?: { piNo?: string | null; poNo?: string | null }) => {
+  /**
+   * Fetch the PI PDF without saving it — used to show a preview first. Caller
+   * must revoke `url` when finished.
+   */
+  fetchPiPdf: async (id: number, doc?: { piNo?: string | null; poNo?: string | null }) => {
     const token = getToken();
     const res = await fetch(`${API_BASE}/api/orders/${id}/pi-pdf${companyParam()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -228,16 +232,21 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || "Failed to download PI PDF");
+      throw new Error(err.error || "Failed to load PI PDF");
     }
     const blob = await res.blob();
     const filename = downloadName(res, piFileName(doc?.piNo, doc?.poNo), "PI.pdf");
-    const url = URL.createObjectURL(blob);
+    return { blob, filename, url: URL.createObjectURL(blob) };
+  },
+
+  downloadPiPdf: async (id: number, doc?: { piNo?: string | null; poNo?: string | null }) => {
+    const { blob, filename, url } = await api.fetchPiPdf(id, doc);
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return { blob, filename };
   },
 
   downloadCiExcel: async (id: number, ciNo?: string | null) => {
