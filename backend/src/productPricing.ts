@@ -363,5 +363,5 @@ export async function applyPriceList(args: {
       version,
       stats: { created, updated, unchanged, total: rows.length },
     };
-  }, { timeout: 120_000 });
+  }, { maxWait: 20_000, timeout: 300_000 });
 }
