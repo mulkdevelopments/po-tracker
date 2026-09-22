@@ -1,6 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import * as pdfjsLib from "pdfjs-dist";
 import { api } from "../api";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url,
+).toString();
 
 type Doc = { piNo?: string | null; poNo?: string | null };
 
@@ -15,27 +21,28 @@ type Props = {
 };
 
 /**
- * Opens the proforma invoice in a full-screen preview so it can be checked
- * before anything is saved to disk. Download lives inside the preview.
+ * Opens the proforma invoice in a preview so it can be checked before anything
+ * is saved to disk. Pages are drawn with PDF.js — the browser's own viewer
+ * leaves these letterhead PDFs blank when they are shown from a blob URL.
  */
 export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Preview PI" }: Props) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [url, setUrl] = useState<string | null>(null);
   const [filename, setFilename] = useState("PI.pdf");
   const [blob, setBlob] = useState<Blob | null>(null);
+  const [bytes, setBytes] = useState<ArrayBuffer | null>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    let objectUrl: string | null = null;
 
     (async () => {
       setLoading(true);
       setError(null);
-      setUrl(null);
       setBlob(null);
+      setBytes(null);
       try {
         const doc: Doc = { piNo, poNo };
         const result = await api.fetchPiPdf(poId, doc);
@@ -43,10 +50,10 @@ export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Pre
           URL.revokeObjectURL(result.url);
           return;
         }
-        objectUrl = result.url;
-        setUrl(result.url);
+        URL.revokeObjectURL(result.url);
         setFilename(result.filename);
         setBlob(result.blob);
+        setBytes(await result.blob.arrayBuffer());
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load PI PDF");
       } finally {
@@ -56,9 +63,51 @@ export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Pre
 
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [open, poId, piNo, poNo]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!open || !bytes || !host) return;
+    let cancelled = false;
+    const task = pdfjsLib.getDocument({ data: bytes.slice(0) });
+
+    (async () => {
+      try {
+        const pdf = await task.promise;
+        if (cancelled) return;
+        host.replaceChildren();
+        const maxWidth = Math.max(320, host.clientWidth - 32);
+        for (let i = 1; i <= pdf.numPages; i++) {
+          if (cancelled) return;
+          const page = await pdf.getPage(i);
+          const unscaled = page.getViewport({ scale: 1 });
+          const viewport = page.getViewport({ scale: Math.min(2, maxWidth / unscaled.width) });
+          const canvas = document.createElement("canvas");
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.className = "bg-white shadow-md max-w-full h-auto";
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue;
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+          if (cancelled) return;
+          const wrap = document.createElement("div");
+          wrap.className = "flex justify-center";
+          wrap.appendChild(canvas);
+          host.appendChild(wrap);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Could not render the PDF");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      void task.destroy();
+    };
+  }, [open, bytes]);
 
   const close = () => setOpen(false);
 
@@ -124,7 +173,7 @@ export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Pre
                 </div>
               </div>
 
-              <div className="flex-1 bg-slate-100 min-h-0 relative">
+              <div className="flex-1 bg-slate-200 min-h-0 relative overflow-auto">
                 {loading && (
                   <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-600">
                     Preparing PDF…
@@ -137,9 +186,7 @@ export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Pre
                     </div>
                   </div>
                 )}
-                {url && !error && (
-                  <iframe title={filename} src={url} className="w-full h-full border-0 bg-white" />
-                )}
+                <div ref={hostRef} className={`p-4 space-y-4 ${error ? "hidden" : ""}`} />
               </div>
             </div>
           </div>,

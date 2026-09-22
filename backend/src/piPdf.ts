@@ -36,6 +36,7 @@ interface PoForPi {
   portOfDest?: string | null;
   piNo?: string | null;
   piDate?: string | null;
+  piApprovedDate?: string | null;
   piValue?: number | null;
   lines: PoLine[];
 }
@@ -55,9 +56,15 @@ const DOC_VALUE_X = 459;
 const BANK_LABEL_RIGHT = 366;
 const BANK_VALUE_X = 384;
 const SIGN_RIGHT_X = 294;
-/** Company seal sits over the issuer signature block. */
-const SEAL_SIZE = 72;
-const SEAL_X = 48;
+/** Company seal sits in the open gap to the right of the issuer signature. */
+const SEAL_SIZE = 64;
+const SEAL_X = 204;
+/** Points below the "Authorised Representative" baseline. Overlay only — not part of the layout. */
+const SEAL_GAP = 4;
+/** Issuer's digital signature, printed in the gap above the left "Authorised Representative". */
+const SIGNATORY = "UMAIR KHAN";
+const SIGNATORY_SIZE = 8;
+const SIGNATURE_BLUE = rgb(0.12, 0.22, 0.55);
 
 const TITLE_Y = 229.5;
 const META_HEAD_Y = 259;
@@ -632,17 +639,20 @@ function drawPi(ctx: Ctx, po: PoForPi, cfg: PiConfig, lift: number): number {
   ensure(ctx, 34);
   const issuerSign = cfg.issuerName.toUpperCase();
   const customerSign = customerName.toUpperCase();
-  const signTop = ctx.y;
   text(ctx, issuerSign, 48, ctx.y, { size: SIGN_SIZE });
   text(ctx, customerSign, SIGN_RIGHT_X, ctx.y, { size: SIGN_SIZE });
   ctx.y += 33.5;
-  text(ctx, "Authorised Representative", 48, ctx.y, {});
-  text(ctx, "Authorised Representative", SIGN_RIGHT_X, ctx.y, {});
-  // Stamp sits over the issuer block — the gap between the company name and the
-  // authorised-representative line is where a wet seal would land on paper.
-  if (ctx.seal) {
-    const sealTop = signTop + 33.5 / 2 - SEAL_SIZE / 2;
-    if (!ctx.dry) {
+  const authY = ctx.y;
+  text(ctx, "Authorised Representative", 48, authY, {});
+  text(ctx, "Authorised Representative", SIGN_RIGHT_X, authY, {});
+  // Name and approval date sit in the gap above the issuer's "Authorised Representative".
+  // Overlay only, and only after the PI is approved, so the footer does not move.
+  const approved = fmtPiDate(po.piApprovedDate);
+  if (approved) {
+    text(ctx, SIGNATORY, 48, authY - 21, { font: ctx.boldItalic, size: SIGNATORY_SIZE, color: SIGNATURE_BLUE });
+    text(ctx, approved, 48, authY - 11, { size: 6.5, color: SIGNATURE_BLUE });
+    if (!ctx.dry && ctx.seal) {
+      const sealTop = authY + SEAL_GAP;
       ctx.page.drawImage(ctx.seal, {
         x: SEAL_X,
         y: PAGE_H - sealTop - SEAL_SIZE,
@@ -651,9 +661,6 @@ function drawPi(ctx: Ctx, po: PoForPi, cfg: PiConfig, lift: number): number {
         opacity: 0.92,
       });
     }
-    // Keep the layout's bottom past the seal so the lift pass can still fit a
-    // short PI on one page instead of orphaning the signatures.
-    ctx.y = Math.max(ctx.y, sealTop + SEAL_SIZE);
   }
   return ctx.y;
 }
