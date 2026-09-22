@@ -63,7 +63,7 @@ export function getStageFieldDefs(master: MasterData): Record<string, StageField
       { k: "freight", label: "Freight", type: "number" },
       { k: "inland", label: "Inland", type: "number" },
       { k: "ciValue", label: "CI Value (USD)", type: "number" },
-      // CI net + freight + inland (computed on save).
+      // CI net + freight + inland − down payment received (computed on save).
       { k: "balanceDue", label: "Balance due (USD)", type: "number", auto: true },
     ],
     "CI approved": [

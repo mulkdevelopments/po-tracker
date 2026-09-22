@@ -17,10 +17,15 @@ export const i = (v: unknown): number | null => (v == null || v === "" ? null : 
  */
 export function orderHeaderFromTracker(o: OrderRecord): Record<string, unknown> {
   const lines = o.lines ?? [];
-  const ciCharges = { ciValue: n(o.ciValue), freight: n(o.freight), inland: n(o.inland) };
-  // Balance due is the app's figure — CI net + freight + inland — rather than the sheet's
-  // column. An order whose balance payment is already recorded keeps what the sheet says
-  // was invoiced: those were billed before this rule, under the downpayment arrangement.
+  const ciCharges = {
+    ciValue: n(o.ciValue),
+    freight: n(o.freight),
+    inland: n(o.inland),
+    dpAmount: n(o.dpAmount),
+  };
+  // Balance due is the app's figure — CI net + freight + inland, less a down payment
+  // already received — rather than the sheet's column. An order whose balance
+  // payment is already recorded keeps what the sheet says was invoiced.
   const settled = n(o.bpAmount) != null || s(o.bpDate) != null;
   const balanceDue = settled ? n(o.balanceDue) : (balanceDueFromCi(ciCharges) ?? n(o.balanceDue));
   // The tracker sheet has no gross invoice column of its own: for UFP the PI value is

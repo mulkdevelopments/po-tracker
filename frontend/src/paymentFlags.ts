@@ -76,37 +76,75 @@ export function downpaymentFlag(
 
 type MoneyInput = number | string | null | undefined;
 
+function money(v: MoneyInput): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** CI net + freight + inland, before any down payment is taken off. */
+function grossCommercial(charges: {
+  ciValue?: MoneyInput;
+  freight?: MoneyInput;
+  inland?: MoneyInput;
+}): number | null {
+  const ciValue = money(charges.ciValue);
+  if (ciValue == null || ciValue === 0) return ciValue;
+  return Math.round((ciValue + (money(charges.freight) ?? 0) + (money(charges.inland) ?? 0)) * 100) / 100;
+}
+
 /**
- * Balance due = commercial invoice (net) + freight + inland. Accepts form
- * strings so the edit screens can show the figure while it is being typed.
+ * Balance due = commercial invoice (net) + freight + inland − down payment
+ * already received. Accepts form strings so the edit screens can show the
+ * figure while it is being typed.
  */
 export function expectedBalanceDue(charges: {
   ciValue?: MoneyInput;
   freight?: MoneyInput;
   inland?: MoneyInput;
+  dpAmount?: MoneyInput;
 }): number | null {
-  const money = (v: MoneyInput) => {
-    if (v == null || v === "") return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  };
   const ciValue = money(charges.ciValue);
   if (ciValue == null) return null;
   // A zeroed invoice marks a superseded revision — nothing is due on it.
   if (ciValue === 0) return 0;
-  const total = ciValue + (money(charges.freight) ?? 0) + (money(charges.inland) ?? 0);
-  return Math.round(total * 100) / 100;
+  const commercial = ciValue + (money(charges.freight) ?? 0) + (money(charges.inland) ?? 0);
+  return Math.round((commercial - (money(charges.dpAmount) ?? 0)) * 100) / 100;
+}
+
+/**
+ * Balance due to show and to check a balance payment against.
+ * When the stored figure is still the full commercial invoice, a down payment
+ * already received comes off it. A figure that was billed as something else
+ * (the older sheet amount) is left as recorded.
+ */
+export function shownBalanceDue(
+  po: Pick<PurchaseOrder, "balanceDue" | "ciValue" | "freight" | "inland" | "dpAmount">,
+): number | null {
+  const stored = po.balanceDue == null ? null : Number(po.balanceDue);
+  const derived = expectedBalanceDue(po);
+  const gross = grossCommercial(po);
+  const dp = money(po.dpAmount) ?? 0;
+  if (
+    derived != null &&
+    dp > 0 &&
+    gross != null &&
+    (stored == null || Math.abs(stored - gross) < 0.05)
+  ) {
+    return derived;
+  }
+  return stored;
 }
 
 /** Flag balance payment once BP amount is recorded */
 export function balancePaymentFlag(
-  po: Pick<PurchaseOrder, "bpAmount" | "bpDate" | "balanceDue">,
+  po: Pick<PurchaseOrder, "bpAmount" | "bpDate" | "balanceDue" | "ciValue" | "freight" | "inland" | "dpAmount">,
   tolerance?: Partial<PaymentTolerance> | null,
 ): PaymentFlag | null {
   if (po.bpAmount == null && !po.bpDate) return null;
   if (po.bpAmount == null) return null;
-  const expected = po.balanceDue;
-  if (expected == null || Number.isNaN(Number(expected))) return null;
+  const expected = shownBalanceDue(po);
+  if (expected == null || Number.isNaN(expected)) return null;
   return flagPayment(
     Number(po.bpAmount),
     Number(expected),

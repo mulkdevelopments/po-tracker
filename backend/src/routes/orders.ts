@@ -226,11 +226,12 @@ function piFileName(piNo: string, poNo: string): string {
   return docFileName(`PI-${serial}-${poNo}`, "pdf");
 }
 
-const CI_CHARGE_FIELDS = ["ciValue", "freight", "inland"] as const;
+const CI_CHARGE_FIELDS = ["ciValue", "freight", "inland", "dpAmount"] as const;
 
 /**
- * Balance due is CI net + freight + inland, so recompute it whenever a write
- * touches one of those charges — whatever the client sent for it is ignored.
+ * Balance due is CI net + freight + inland, less any down payment already
+ * received. Recompute it whenever a write touches one of those — whatever
+ * the client sent for the balance is ignored.
  */
 function withBalanceDue(
   poData: Record<string, unknown>,

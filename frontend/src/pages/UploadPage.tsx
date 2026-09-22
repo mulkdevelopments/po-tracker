@@ -285,11 +285,11 @@ export default function UploadPage() {
     totals.skids,
   ]);
 
-  // Balance due is the CI net plus the charges invoiced with it.
+  // Balance due is the CI net plus the charges invoiced with it, less a down payment already received.
   useEffect(() => {
     const due = expectedBalanceDue(form);
     setForm((f) => ({ ...f, balanceDue: due == null ? "" : String(due) }));
-  }, [form.ciValue, form.freight, form.inland]);
+  }, [form.ciValue, form.freight, form.inland, form.dpAmount]);
 
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {

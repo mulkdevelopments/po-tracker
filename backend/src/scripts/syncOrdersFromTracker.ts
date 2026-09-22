@@ -191,8 +191,8 @@ async function run(company: Company, apply: boolean) {
     const current = po as unknown as Record<string, unknown>;
     const skip = new Set(APP_OWNED);
 
-    // What was billed on an invoice already paid stands, even though balance due is now
-    // derived from the CI charges (orderHeaderFromTracker) rather than read off the sheet.
+    // What was billed on an invoice already paid stands. New invoices take the
+    // derived balance due (CI + freight + inland − down payment received).
     if (!blank(current.bpAmount) || !blank(current.bpDate)) skip.add("balanceDue");
 
     // The sheet still shows a revision the app has since superseded — it cannot revive it.

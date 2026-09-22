@@ -181,11 +181,13 @@ export type CiCharges = {
   ciValue?: unknown;
   freight?: unknown;
   inland?: unknown;
+  /** Down payment already received. Deducted from the commercial amount due. */
+  dpAmount?: unknown;
 };
 
 /**
  * The customer is billed the net commercial invoice plus the freight and inland
- * haulage charged with it, so balance due is derived rather than typed.
+ * haulage charged with it. A down payment already received comes off that figure.
  */
 export function balanceDueFromCi(po: CiCharges): number | null {
   const ciValue = num(po.ciValue);
@@ -193,5 +195,7 @@ export function balanceDueFromCi(po: CiCharges): number | null {
   // A zeroed invoice is how the tracker marks a superseded revision: nothing is due,
   // even though the container's freight and inland figures are still on the row.
   if (ciValue === 0) return 0;
-  return round(ciValue + (num(po.freight) ?? 0) + (num(po.inland) ?? 0), 2);
+  const commercial = ciValue + (num(po.freight) ?? 0) + (num(po.inland) ?? 0);
+  const downPayment = num(po.dpAmount) ?? 0;
+  return round(commercial - downPayment, 2);
 }

@@ -54,6 +54,7 @@ import {
   expectedBalanceDue,
   paymentTolerance,
   resolveGrossInvoiceValue,
+  shownBalanceDue,
   sumLineExtInv,
   sumLineExtPo,
 } from "../paymentFlags";
@@ -107,7 +108,7 @@ const MILESTONE_KEYS = new Set([
 ]);
 
 // Charges that make up the balance due, which is derived rather than typed.
-const CI_CHARGE_KEYS = new Set(["ciValue", "freight", "inland"]);
+const CI_CHARGE_KEYS = new Set(["ciValue", "freight", "inland", "dpAmount"]);
 
 function deriveStatus(f: Record<string, string>, company: WorkflowCompany): string {
   return deriveStatusFromFields(f, company);
@@ -537,7 +538,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                           readOnly
                           value={form.balanceDue ?? ""}
                           className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-600"
-                          title="CI value (net) + freight + inland"
+                          title="CI value (net) + freight + inland − down payment received"
                         />
                       ) : (
                         <input
@@ -911,7 +912,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="Freight" val={fmtMoney(po.freight)} />
                   <Field label="Inland" val={fmtMoney(po.inland)} />
                   <Field label="CI value" val={fmtMoney(po.ciValue)} />
-                  <Field label="Balance due" val={fmtMoney(po.balanceDue)} />
+                  <Field label="Balance due" val={fmtMoney(shownBalanceDue(po))} />
                   <Field label="CI approved" val={po.ciApprovedDate ? fmtDate(po.ciApprovedDate) : null} />
                   <Field label="BOL / SWBOL" val={po.bol} />
                   <Field label="Shipping line" val={po.shippingLine} />
@@ -1190,7 +1191,7 @@ function buildInitialAdvanceFields(
     if (!out.ciDate) out.ciDate = todayISO();
     if (!out.ciValue && po.piValue != null) out.ciValue = String(po.piValue);
     else if (!out.ciValue && po.poValue != null) out.ciValue = String(po.poValue);
-    const due = expectedBalanceDue(out);
+    const due = expectedBalanceDue({ ...out, dpAmount: po.dpAmount });
     out.balanceDue = due == null ? "" : String(due);
   }
   if (nextStage === "CI approved") {
@@ -1201,8 +1202,11 @@ function buildInitialAdvanceFields(
   }
   if (nextStage === "Balance Payment Received") {
     if (!out.bpDate) out.bpDate = todayISO();
-    if (!out.bpAmount && po.balanceDue != null) out.bpAmount = String(po.balanceDue);
-    else if (!out.bpAmount && po.bpAmount != null) out.bpAmount = String(po.bpAmount);
+    if (!out.bpAmount) {
+      const due = shownBalanceDue(po);
+      if (due != null) out.bpAmount = String(due);
+      else if (po.bpAmount != null) out.bpAmount = String(po.bpAmount);
+    }
   }
   if (nextStage === "Telex / Seaway Released") {
     if (!out.telexDate) out.telexDate = todayISO();
@@ -1254,7 +1258,7 @@ function AdvanceButton({
     setFields((prev) => {
       const next = { ...prev, [key]: value };
       if (CI_CHARGE_KEYS.has(key)) {
-        const due = expectedBalanceDue(next);
+        const due = expectedBalanceDue({ ...next, dpAmount: next.dpAmount ?? po.dpAmount });
         next.balanceDue = due == null ? "" : String(due);
       }
       if (nextStage === "BL" && (key === "bol" || key === "shippingLine")) {
@@ -1470,7 +1474,8 @@ function AdvanceButton({
                 <span className="text-slate-500">CI Value:</span> {po.ciValue != null ? fmtMoney(po.ciValue) : "—"}
               </div>
               <div>
-                <span className="text-slate-500">Balance due:</span> {po.balanceDue != null ? fmtMoney(po.balanceDue) : "—"}
+                <span className="text-slate-500">Balance due:</span>{" "}
+                {shownBalanceDue(po) != null ? fmtMoney(shownBalanceDue(po)) : "—"}
               </div>
             </div>
           )}
@@ -1534,7 +1539,7 @@ function AdvanceButton({
                   readOnly
                   value={fields[f.k] ?? ""}
                   className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-700"
-                  title="CI value (net) + freight + inland"
+                  title="CI value (net) + freight + inland − down payment received"
                 />
               ) : (
                 <input

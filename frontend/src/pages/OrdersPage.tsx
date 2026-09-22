@@ -35,6 +35,7 @@ import {
   downpaymentFlag,
   paymentTolerance,
   resolveGrossInvoiceValue,
+  shownBalanceDue,
 } from "../paymentFlags";
 
 type ColType = "text" | "int" | "num" | "money" | "date" | "status" | "bool" | "url";
@@ -259,6 +260,7 @@ export default function OrdersPage() {
 
   const cellRaw = (p: PurchaseOrder, col: Col) => {
     if (col.key === "grossInvoiceValue") return resolveGrossInvoiceValue(p);
+    if (col.key === "balanceDue") return shownBalanceDue(p);
     if (col.key === "priority") return p.priority || "Standard";
     return p[col.key];
   };

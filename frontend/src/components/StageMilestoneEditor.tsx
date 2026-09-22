@@ -21,14 +21,17 @@ function toStr(v: unknown): string {
 }
 
 // Charges that make up the balance due, which is derived rather than typed.
-const CI_CHARGE_KEYS = new Set(["ciValue", "freight", "inland"]);
+const CI_CHARGE_KEYS = new Set(["ciValue", "freight", "inland", "dpAmount"]);
 
 function loadFields(po: PurchaseOrder, defs: StageFieldDef[]): Record<string, string> {
   const rec = po as unknown as Record<string, unknown>;
   const out: Record<string, string> = {};
   for (const f of defs) out[f.k] = toStr(rec[f.k]);
   if ("balanceDue" in out) {
-    const due = expectedBalanceDue(out);
+    const due = expectedBalanceDue({
+      ...out,
+      dpAmount: "dpAmount" in out ? out.dpAmount : po.dpAmount,
+    });
     out.balanceDue = due == null ? "" : String(due);
   }
   return out;
@@ -90,7 +93,10 @@ export default function StageMilestoneEditor({
     setFields((prev) => {
       const next = { ...prev, [key]: value };
       if (CI_CHARGE_KEYS.has(key)) {
-        const due = expectedBalanceDue(next);
+        const due = expectedBalanceDue({
+          ...next,
+          dpAmount: "dpAmount" in next ? next.dpAmount : po.dpAmount,
+        });
         next.balanceDue = due == null ? "" : String(due);
       }
       if (stageId === "BL" && (key === "bol" || key === "shippingLine")) {
@@ -228,7 +234,7 @@ export default function StageMilestoneEditor({
                     readOnly
                     value={fields[f.k] ?? ""}
                     className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-700"
-                    title="CI value (net) + freight + inland"
+                    title="CI value (net) + freight + inland − down payment received"
                   />
                 ) : (
                   <input
