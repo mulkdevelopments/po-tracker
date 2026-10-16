@@ -57,7 +57,6 @@ export function orderHeaderFromTracker(o: OrderRecord): Record<string, unknown> 
     piValue: n(o.piValue),
     dpDate: s(o.dpDate),
     piToDp: i(o.piToDp),
-    dpAmount: n(o.dpAmount),
     productionEtc: s(o.productionEtc),
     shippingEta: s(o.shippingEta),
     bol: s(o.bol),
