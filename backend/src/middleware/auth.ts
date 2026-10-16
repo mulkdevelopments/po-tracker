@@ -17,6 +17,7 @@ export interface AuthUser {
   name: string;
   email: string;
   role: string;
+  canSelfApprove: boolean;
   accessLevel: string;
   restrictedPages: string[];
 }
@@ -41,6 +42,7 @@ export function signToken(user: User): string {
     name: user.name,
     email: user.email,
     role: user.role,
+    canSelfApprove: user.canSelfApprove,
     accessLevel: user.accessLevel,
     restrictedPages: user.restrictedPages,
   };
@@ -53,6 +55,7 @@ export function toAuthUser(user: User): AuthUser {
     name: user.name,
     email: user.email,
     role: user.role,
+    canSelfApprove: user.canSelfApprove,
     accessLevel: user.accessLevel,
     restrictedPages: user.restrictedPages,
   };
@@ -106,7 +109,7 @@ export function requirePoEdit(req: Request, res: Response, next: NextFunction) {
 export function requireStageAdvance(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: "Authentication required" });
   const nextStage = String(req.body?.nextStage ?? "");
-  if (!nextStage || !canAdvanceStage(req.user.role, nextStage)) {
+  if (!nextStage || !canAdvanceStage(req.user.role, nextStage, req.user.canSelfApprove)) {
     return res.status(403).json({ error: `Cannot advance to ${nextStage || "stage"}` });
   }
   next();

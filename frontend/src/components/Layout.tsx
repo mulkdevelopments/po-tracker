@@ -8,7 +8,7 @@ import type { Company } from "../companies";
 import { NavIcon } from "./NavIcons";
 import { usePendingPiApprovals } from "../hooks/usePendingPiApprovals";
 import { usePendingCiApprovals } from "../hooks/usePendingCiApprovals";
-import { isManagerRole, isFinanceRole } from "../piApproval";
+import { seesPiApprovals, seesCiApprovals } from "../piApproval";
 import PiApprovalNotice from "./PiApprovalNotice";
 import CiApprovalNotice from "./CiApprovalNotice";
 
@@ -39,8 +39,8 @@ export default function Layout() {
   const currentPage = navItems.find((n) => location.pathname.startsWith(n.to));
   const moreNavItems = navItems.slice(4);
   const isMoreActive = moreNavItems.some((n) => location.pathname.startsWith(n.to));
-  const isManager = isManagerRole(user?.role);
-  const isFinance = isFinanceRole(user?.role);
+  const isManager = seesPiApprovals(user);
+  const isFinance = seesCiApprovals(user);
   const { pending: pendingPi, count: pendingPiCount } = usePendingPiApprovals(isManager);
   const { pending: pendingCi, count: pendingCiCount } = usePendingCiApprovals(isFinance);
   const pendingApprovalCount = pendingPiCount + pendingCiCount;

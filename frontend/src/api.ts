@@ -490,9 +490,12 @@ export function canManageUsers(user: AuthUser): boolean {
 
 export { STAGE_OWNERS, getNextStage, getAllowedAdvanceStages, getSubstageLabel } from "./workflows";
 
+const SELF_APPROVE_STAGES = new Set(["PI Approved", "CI approved"]);
+
 export function canAdvanceStage(user: AuthUser, stage: string): boolean {
   if (user.role === "VIEWER") return false;
   if (user.role === "SUPER_ADMIN") return true;
+  if (user.role === "MAINTAINER" && user.canSelfApprove && SELF_APPROVE_STAGES.has(stage)) return true;
   return (STAGE_OWNERS[stage] ?? []).includes(user.role);
 }
 

@@ -60,23 +60,27 @@ const createUserSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   role: assignableRole,
+  canSelfApprove: z.boolean().optional(),
   restrictedPages: z.array(z.string()).default([]),
 });
+
+const userSelect = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  canSelfApprove: true,
+  accessLevel: true,
+  restrictedPages: true,
+  isActive: true,
+  createdAt: true,
+} as const;
 
 router.get("/users", requireAuth, requireSuperAdmin, async (_req, res) => {
   const users = await prisma.user.findMany({
     where: { role: { not: "SUPER_ADMIN" } },
     orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      accessLevel: true,
-      restrictedPages: true,
-      isActive: true,
-      createdAt: true,
-    },
+    select: userSelect,
   });
   res.json({ users });
 });
@@ -98,20 +102,12 @@ router.post("/users", requireAuth, requireSuperAdmin, async (req, res) => {
       email: data.email.toLowerCase(),
       passwordHash,
       role: data.role,
+      canSelfApprove: data.role === "MAINTAINER" && data.canSelfApprove === true,
       accessLevel: accessLevelForRole(data.role),
       restrictedPages: data.restrictedPages,
       createdById: req.user!.id,
     },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      accessLevel: true,
-      restrictedPages: true,
-      isActive: true,
-      createdAt: true,
-    },
+    select: userSelect,
   });
   res.status(201).json({ user });
 });
@@ -121,6 +117,7 @@ const updateUserSchema = z.object({
   email: z.string().email().optional(),
   password: z.string().min(8).optional(),
   role: assignableRole.optional(),
+  canSelfApprove: z.boolean().optional(),
   restrictedPages: z.array(z.string()).optional(),
   isActive: z.boolean().optional(),
 });
@@ -147,20 +144,17 @@ router.patch("/users/:id", requireAuth, requireSuperAdmin, async (req, res) => {
   if (data.password) update.passwordHash = await bcrypt.hash(data.password, 12);
   if (data.role) update.accessLevel = accessLevelForRole(data.role);
   delete update.password;
+  const nextRole = data.role ?? target.role;
+  if (nextRole !== "MAINTAINER") {
+    update.canSelfApprove = false;
+  } else if (data.canSelfApprove !== undefined) {
+    update.canSelfApprove = data.canSelfApprove;
+  }
 
   const user = await prisma.user.update({
     where: { id: target.id },
     data: update,
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      accessLevel: true,
-      restrictedPages: true,
-      isActive: true,
-      createdAt: true,
-    },
+    select: userSelect,
   });
   res.json({ user });
 });

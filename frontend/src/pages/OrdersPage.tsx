@@ -11,8 +11,8 @@ import { usePendingPiApprovals } from "../hooks/usePendingPiApprovals";
 import { usePendingCiApprovals } from "../hooks/usePendingCiApprovals";
 import { usePendingStockingEmails } from "../hooks/usePendingStockingEmails";
 import {
-  isManagerRole,
-  isFinanceRole,
+  seesPiApprovals,
+  seesCiApprovals,
   PI_PENDING_STATUS,
   PI_REJECTED_STATUS,
   CI_PENDING_STATUS,
@@ -138,8 +138,8 @@ export default function OrdersPage() {
   const { user, canEdit } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const isManager = isManagerRole(user?.role);
-  const isFinance = isFinanceRole(user?.role);
+  const isManager = seesPiApprovals(user);
+  const isFinance = seesCiApprovals(user);
   const isMaintainer = isOperationalAdminRole(user?.role);
   const showStockingEmailQueue = canMarkStockingEmailRole(user?.role);
   const showPiDueQueue = canMarkPiEmailRole(user?.role);

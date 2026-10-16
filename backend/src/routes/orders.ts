@@ -943,7 +943,7 @@ router.post("/:id/advance", requireAuth, requirePage("orders"), requireStageAdva
       error: `Cannot advance to ${nextStage}. Allowed: ${allowed.length ? allowed.join(", ") : "(complete)"}`,
     });
   }
-  if (!canAdvanceStage(req.user!.role, nextStage)) {
+  if (!canAdvanceStage(req.user!.role, nextStage, req.user!.canSelfApprove)) {
     return res.status(403).json({ error: `Cannot advance to ${nextStage}` });
   }
 
@@ -1018,7 +1018,7 @@ const rejectPiSchema = z.object({
 
 router.post("/:id/reject-pi", requireAuth, requirePage("orders"), async (req, res) => {
   const company = getCompany(req);
-  if (!canRejectPi(req.user!.role)) {
+  if (!canRejectPi(req.user!.role, req.user!.canSelfApprove)) {
     return res.status(403).json({ error: "Manager access required to reject PI" });
   }
   const parsed = rejectPiSchema.safeParse(req.body);
@@ -1112,7 +1112,7 @@ router.post("/:id/resubmit-pi", requireAuth, requirePage("orders"), async (req, 
 
 router.post("/:id/reject-ci", requireAuth, requirePage("orders"), async (req, res) => {
   const company = getCompany(req);
-  if (!canRejectCi(req.user!.role)) {
+  if (!canRejectCi(req.user!.role, req.user!.canSelfApprove)) {
     return res.status(403).json({ error: "Finance access required to reject CI" });
   }
   const parsed = rejectPiSchema.safeParse(req.body);

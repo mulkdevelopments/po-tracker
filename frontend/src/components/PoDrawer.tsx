@@ -171,9 +171,9 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     allowedStages.length > 0;
   const canEditProductionActualsPo = canEditProductionActualsForPo(user, pipelineStatus, company, poRec);
   const canDeletePo = canEditPo(user);
-  const showRejectPi = canRejectPiRole(user.role) && po.status === PI_PENDING_STATUS;
+  const showRejectPi = canRejectPiRole(user.role, user.canSelfApprove) && po.status === PI_PENDING_STATUS;
   const showResubmitPi = canResubmitPiRole(user.role) && po.status === PI_REJECTED_STATUS;
-  const showRejectCi = canRejectCiRole(user.role) && po.status === CI_PENDING_STATUS;
+  const showRejectCi = canRejectCiRole(user.role, user.canSelfApprove) && po.status === CI_PENDING_STATUS;
   const showResubmitCi = canResubmitCiRole(user.role) && po.status === CI_REJECTED_STATUS;
 
   const payTol = paymentTolerance(master);

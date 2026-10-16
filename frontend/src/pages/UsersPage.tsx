@@ -15,6 +15,7 @@ export default function UsersPage() {
     email: "",
     password: "",
     role: "MAINTAINER",
+    canSelfApprove: false,
     restrictedPages: [] as string[],
   });
   const [error, setError] = useState("");
@@ -44,6 +45,7 @@ export default function UsersPage() {
       email: "",
       password: "",
       role: "MAINTAINER",
+      canSelfApprove: false,
       restrictedPages: [],
     });
     setEditing(null);
@@ -60,6 +62,7 @@ export default function UsersPage() {
           name: form.name,
           email: form.email,
           role: form.role,
+          canSelfApprove: form.role === "MAINTAINER" && form.canSelfApprove,
           restrictedPages: form.restrictedPages,
         };
         if (form.password) payload.password = form.password;
@@ -81,6 +84,7 @@ export default function UsersPage() {
       email: u.email,
       password: "",
       role: u.role,
+      canSelfApprove: u.role === "MAINTAINER" && u.canSelfApprove === true,
       restrictedPages: u.restrictedPages,
     });
     setShowForm(true);
@@ -156,7 +160,13 @@ export default function UsersPage() {
               <label className="text-xs text-slate-500">Role</label>
               <select
                 value={form.role}
-                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    role: e.target.value,
+                    canSelfApprove: e.target.value === "MAINTAINER" ? form.canSelfApprove : false,
+                  })
+                }
                 className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
               >
                 {ASSIGNABLE_ROLES.map((r) => (
@@ -167,6 +177,26 @@ export default function UsersPage() {
               </select>
             </div>
           </div>
+          {form.role === "MAINTAINER" && (
+            <label className="flex items-center gap-3 text-sm text-slate-700">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.canSelfApprove}
+                onClick={() => setForm({ ...form, canSelfApprove: !form.canSelfApprove })}
+                className={`relative h-6 w-11 rounded-full transition-colors ${
+                  form.canSelfApprove ? "bg-indigo-600" : "bg-slate-300"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                    form.canSelfApprove ? "translate-x-5" : ""
+                  }`}
+                />
+              </button>
+              Approver — this maintainer can approve and reject PI and CI
+            </label>
+          )}
           <div>
             <label className="text-xs text-slate-500 block mb-2">Restrict from pages (additional)</label>
             <div className="flex flex-wrap gap-2">
@@ -209,6 +239,7 @@ export default function UsersPage() {
               <th>Name</th>
               <th>Email</th>
               <th>Role</th>
+              <th>Approver</th>
               <th>Restricted pages</th>
               <th>Status</th>
               <th></th>
@@ -220,6 +251,31 @@ export default function UsersPage() {
                 <td className="font-medium">{u.name}</td>
                 <td>{u.email}</td>
                 <td>{ROLE_LABELS[u.role] || u.role}</td>
+                <td>
+                  {u.role === "MAINTAINER" ? (
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={u.canSelfApprove === true}
+                      aria-label={`Approver for ${u.name}`}
+                      onClick={async () => {
+                        await api.updateUser(u.id, { canSelfApprove: u.canSelfApprove !== true });
+                        load();
+                      }}
+                      className={`relative h-6 w-11 rounded-full transition-colors ${
+                        u.canSelfApprove ? "bg-indigo-600" : "bg-slate-300"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                          u.canSelfApprove ? "translate-x-5" : ""
+                        }`}
+                      />
+                    </button>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td className="text-xs">{u.restrictedPages.join(", ") || "—"}</td>
                 <td>{u.isActive ? "Active" : "Disabled"}</td>
                 <td className="text-right space-x-2">

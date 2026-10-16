@@ -29,20 +29,32 @@ export function isOperationalAdminRole(role?: string | null): boolean {
   return role === "SUPER_ADMIN" || role === "MAINTAINER";
 }
 
-export function canRejectPiRole(role?: string | null): boolean {
-  return role === "MANAGER" || role === "SUPER_ADMIN";
+export function userCanSelfApprove(user?: { role?: string | null; canSelfApprove?: boolean | null } | null): boolean {
+  return user?.role === "MAINTAINER" && user.canSelfApprove === true;
+}
+
+export function seesPiApprovals(user?: { role?: string | null; canSelfApprove?: boolean | null } | null): boolean {
+  return isManagerRole(user?.role) || userCanSelfApprove(user);
+}
+
+export function seesCiApprovals(user?: { role?: string | null; canSelfApprove?: boolean | null } | null): boolean {
+  return isFinanceRole(user?.role) || userCanSelfApprove(user);
+}
+
+export function canRejectPiRole(role?: string | null, canSelfApprove?: boolean | null): boolean {
+  return role === "MANAGER" || role === "SUPER_ADMIN" || (role === "MAINTAINER" && canSelfApprove === true);
 }
 
 export function isFinanceRole(role?: string | null): boolean {
   return role === "FINANCE";
 }
 
-export function canApproveCiRole(role?: string | null): boolean {
-  return role === "FINANCE" || role === "SUPER_ADMIN";
+export function canApproveCiRole(role?: string | null, canSelfApprove?: boolean | null): boolean {
+  return role === "FINANCE" || role === "SUPER_ADMIN" || (role === "MAINTAINER" && canSelfApprove === true);
 }
 
-export function canRejectCiRole(role?: string | null): boolean {
-  return role === "FINANCE" || role === "SUPER_ADMIN";
+export function canRejectCiRole(role?: string | null, canSelfApprove?: boolean | null): boolean {
+  return role === "FINANCE" || role === "SUPER_ADMIN" || (role === "MAINTAINER" && canSelfApprove === true);
 }
 
 export function canResubmitPiRole(role?: string | null): boolean {

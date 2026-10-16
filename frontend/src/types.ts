@@ -63,6 +63,7 @@ export interface AuthUser {
   name: string;
   email: string;
   role: string;
+  canSelfApprove?: boolean;
   accessLevel: string;
   restrictedPages: string[];
 }
@@ -383,6 +384,7 @@ export interface AppUser {
   name: string;
   email: string;
   role: string;
+  canSelfApprove?: boolean;
   accessLevel: string;
   restrictedPages: string[];
   isActive: boolean;

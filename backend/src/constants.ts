@@ -117,18 +117,21 @@ export function canWrite(role: string, _accessLevel: string): boolean {
   return isOperationalAdmin(role);
 }
 
-export function canAdvanceStage(role: string, stage: string): boolean {
+const SELF_APPROVE_STAGES = new Set(["PI Approved", "CI approved"]);
+
+export function canAdvanceStage(role: string, stage: string, canSelfApprove = false): boolean {
   if (role === "VIEWER") return false;
   if (role === "SUPER_ADMIN") return true;
+  if (role === "MAINTAINER" && canSelfApprove && SELF_APPROVE_STAGES.has(stage)) return true;
   return (STAGE_OWNERS[stage] ?? []).includes(role);
 }
 
-export function canRejectPi(role: string): boolean {
-  return role === "MANAGER" || role === "SUPER_ADMIN";
+export function canRejectPi(role: string, canSelfApprove = false): boolean {
+  return role === "MANAGER" || role === "SUPER_ADMIN" || (role === "MAINTAINER" && canSelfApprove);
 }
 
-export function canRejectCi(role: string): boolean {
-  return role === "FINANCE" || role === "SUPER_ADMIN";
+export function canRejectCi(role: string, canSelfApprove = false): boolean {
+  return role === "FINANCE" || role === "SUPER_ADMIN" || (role === "MAINTAINER" && canSelfApprove);
 }
 
 export function canResubmitPi(role: string): boolean {
