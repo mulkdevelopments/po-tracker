@@ -4,7 +4,7 @@ import { useAuth } from "../AuthContext";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, ReferenceData, AppConfigData } from "../types";
 import { fmtMoney, fmtNum } from "../utils";
-import { computeDashboard, statusMix, totalRow, dashboardActiveYearOrders, type VolumeRow } from "../reports";
+import { computeDashboard, statusMix, totalRow, dashboardActiveYearOrders, orderStatusGroup, type VolumeRow, type DashboardScope } from "../reports";
 import type { Company } from "../companies";
 import { StatusDoughnut, AnnualSalesPanel, CapacityPanel, DashboardYearFilter } from "../components/DashboardCharts";
 import PoDrawer from "../components/PoDrawer";
@@ -15,7 +15,6 @@ import { canMarkStockingEmailRole } from "../stockingEmail";
 import { pendingPiDue } from "../piDue";
 import { canMarkPiEmailRole } from "../piEmail";
 import { useCompany } from "../CompanyContext";
-import { reportGroupLabel } from "../workflows";
 import { notifyPoUpdated } from "../poEvents";
 import type { MasterData } from "../types";
 
@@ -31,23 +30,42 @@ function shortLoc(l: string) {
   return l.split(",")[0];
 }
 
+type CompanyPack = {
+  company: Company;
+  pos: PurchaseOrder[];
+  ref: ReferenceData;
+  master: MasterData;
+};
+
+function mergeRefs(a: ReferenceData, b: ReferenceData): ReferenceData {
+  const stockingLocations = [...a.stockingLocations];
+  for (const loc of b.stockingLocations) {
+    if (!stockingLocations.some((l) => l.name === loc.name)) stockingLocations.push(loc);
+  }
+  const colors = [...a.colors];
+  for (const color of b.colors) {
+    if (!colors.some((c) => c.code === color.code)) colors.push(color);
+  }
+  return { ...a, stockingLocations, colors };
+}
+
 function StatusDetailModal({
   status,
   pos,
   year,
-  company,
+  scope,
   onClose,
   onSelectPo,
 }: {
   status: string;
   pos: PurchaseOrder[];
   year: number;
-  company: Company;
+  scope: DashboardScope;
   onClose: () => void;
   onSelectPo: (po: PurchaseOrder) => void;
 }) {
   const matches = dashboardActiveYearOrders(pos, year).filter(
-    (p) => reportGroupLabel(company, p.status) === status,
+    (p) => orderStatusGroup(p, scope) === status,
   );
   const totalValue = matches.reduce((s, p) => s + (Number(p.poValue) || 0), 0);
   const totalM2 = matches.reduce((s, p) => s + (Number(p.totalM2) || 0), 0);
@@ -62,7 +80,14 @@ function StatusDetailModal({
         <div className="overflow-auto">
           <table className="tbl w-full text-xs">
             <thead>
-              <tr><th>PO #</th><th>Stocking Location</th><th>PO Date</th><th className="text-right">M²</th><th className="text-right">Value</th></tr>
+              <tr>
+                <th>PO #</th>
+                {scope === "BOTH" && <th>Company</th>}
+                <th>Stocking Location</th>
+                <th>PO Date</th>
+                <th className="text-right">M²</th>
+                <th className="text-right">Value</th>
+              </tr>
             </thead>
             <tbody>
               {matches.map((p) => (
@@ -72,6 +97,7 @@ function StatusDetailModal({
                   onClick={() => onSelectPo(p)}
                 >
                   <td className="font-mono font-semibold text-slate-900">{p.poNo}</td>
+                  {scope === "BOTH" && <td>{p.company === "SYNERGY" ? "Cynergy" : "UFP"}</td>}
                   <td>{p.stockingLocation || "—"}</td>
                   <td>{p.poDate || "—"}</td>
                   <td className="text-right">{fmtNum(p.totalM2, 0)}</td>
@@ -130,34 +156,50 @@ function VolumeTable({ title, rows, year }: { title: string; rows: VolumeRow[]; 
 export default function DashboardPage() {
   const { user, canEdit } = useAuth();
   const { company } = useCompany();
+  const [scope, setScope] = useState<DashboardScope>(company);
   const showStockingEmailQueue = canMarkStockingEmailRole(user?.role);
   const showPiQueue = canMarkPiEmailRole(user?.role);
   const { pending: pendingStockingEmail } = usePendingStockingEmails(!!showStockingEmailQueue);
-  const [pos, setPos] = useState<PurchaseOrder[]>([]);
-  const [ref, setRef] = useState<ReferenceData | null>(null);
-  const [config, setConfig] = useState<AppConfigData | null>(null);
+  const [packs, setPacks] = useState<CompanyPack[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [year, setYear] = useState(readStoredYear);
   const [statusDetail, setStatusDetail] = useState<string | null>(null);
   const [selected, setSelected] = useState<PurchaseOrder | null>(null);
-  const [master, setMaster] = useState<MasterData>({});
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([api.getOrders(), api.getReference(), api.getSettings()])
-      .then(([o, r, settings]) => {
-        setPos(o.pos);
-        setRef(r);
-        setConfig(r.config);
-        setMaster(settings.master);
+    const companies: Company[] = scope === "BOTH" ? ["UFP", "SYNERGY"] : [scope];
+    Promise.all(
+      companies.map(async (c) => {
+        const [orders, reference, settings] = await Promise.all([
+          api.getOrders(c),
+          api.getReference(c),
+          api.getSettings(c),
+        ]);
+        return {
+          company: c,
+          pos: orders.pos.map((p) => ({ ...p, company: p.company ?? c })),
+          ref: reference,
+          master: settings.master,
+        };
+      }),
+    )
+      .then((loaded) => {
+        if (!cancelled) setPacks(loaded);
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load dashboard");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load dashboard");
       })
-      .finally(() => setLoading(false));
-  }, []);
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope]);
 
   const setDashboardYear = (y: number) => {
     setYear(y);
@@ -168,6 +210,16 @@ export default function DashboardPage() {
     setStatusDetail(null);
     setSelected(po);
   };
+
+  const pos = useMemo(() => packs.flatMap((p) => p.pos), [packs]);
+  const ref = useMemo(() => {
+    if (packs.length === 2) return mergeRefs(packs[0].ref, packs[1].ref);
+    return packs[0]?.ref ?? null;
+  }, [packs]);
+  const config: AppConfigData | null = scope === "BOTH" ? null : (packs[0]?.ref.config ?? null);
+  const master = selected
+    ? (packs.find((p) => p.company === (selected.company ?? company))?.master ?? {})
+    : {};
 
   const piDue = useMemo(() => (showPiQueue ? pendingPiDue(pos) : []), [showPiQueue, pos]);
 
@@ -180,9 +232,11 @@ export default function DashboardPage() {
     );
   }
 
-  const d = computeDashboard(pos, ref, year, company);
-  const mix = statusMix(pos, year, company);
-  const yearScope = `PO date in ${year} · Total PO includes inactive`;
+  const d = computeDashboard(pos, ref, year, scope);
+  const mix = statusMix(pos, year, scope);
+  const yearScope = scope === "BOTH"
+    ? `UFP and Cynergy · PO date in ${year} · Total PO includes inactive`
+    : `PO date in ${year} · Total PO includes inactive`;
 
   const stagePill = (s: string) => {
     const cls = STAGE_COLORS[s] || "bg-slate-100 text-slate-700";
@@ -200,7 +254,28 @@ export default function DashboardPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-500">{yearScope}</p>
-        <DashboardYearFilter pos={pos} year={year} onYear={setDashboardYear} />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex rounded-md border border-slate-300 overflow-hidden text-sm" role="group" aria-label="Company">
+            {([
+              ["UFP", "UFP"],
+              ["SYNERGY", "Cynergy"],
+              ["BOTH", "Both"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={scope === id}
+                onClick={() => setScope(id)}
+                className={`px-3 py-1.5 ${
+                  scope === id ? "bg-indigo-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <DashboardYearFilter pos={pos} year={year} onYear={setDashboardYear} />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -219,15 +294,29 @@ export default function DashboardPage() {
       </div>
 
       <AnnualSalesPanel pos={pos} year={year} />
-      {config && (
-        <CapacityPanel
-          pos={pos}
-          year={year}
-          config={config}
-          capacityPeriods={ref.capacityPeriods ?? []}
-          canEditMaster={canEdit()}
-        />
-      )}
+      {scope === "BOTH"
+        ? packs.map((p) =>
+            p.ref.config ? (
+              <CapacityPanel
+                key={p.company}
+                title={`${p.company === "UFP" ? "UFP" : "Cynergy"} — Production vs Capacity (${year})`}
+                pos={p.pos}
+                year={year}
+                config={p.ref.config}
+                capacityPeriods={p.ref.capacityPeriods ?? []}
+                canEditMaster={canEdit()}
+              />
+            ) : null,
+          )
+        : config && (
+            <CapacityPanel
+              pos={pos}
+              year={year}
+              config={config}
+              capacityPeriods={ref.capacityPeriods ?? []}
+              canEditMaster={canEdit()}
+            />
+          )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-lg border border-slate-200 p-4">
@@ -318,7 +407,7 @@ export default function DashboardPage() {
           status={statusDetail}
           pos={pos}
           year={year}
-          company={company}
+          scope={scope}
           onClose={() => setStatusDetail(null)}
           onSelectPo={openPoFromStatusModal}
         />
@@ -331,12 +420,18 @@ export default function DashboardPage() {
           master={master}
           onClose={() => setSelected(null)}
           onUpdated={(po) => {
-            setPos((prev) => prev.map((x) => (x.id === po.id ? po : x)));
+            setPacks((prev) =>
+              prev.map((pack) =>
+                pack.company === (po.company ?? pack.company)
+                  ? { ...pack, pos: pack.pos.map((x) => (x.id === po.id ? { ...po, company: po.company ?? pack.company } : x)) }
+                  : pack,
+              ),
+            );
             setSelected(po);
             notifyPoUpdated();
           }}
           onDeleted={(id) => {
-            setPos((prev) => prev.filter((x) => x.id !== id));
+            setPacks((prev) => prev.map((pack) => ({ ...pack, pos: pack.pos.filter((x) => x.id !== id) })));
             setSelected(null);
             notifyPoUpdated();
           }}

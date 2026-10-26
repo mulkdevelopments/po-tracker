@@ -221,7 +221,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   }, [po.id]);
 
   useEffect(() => {
-    api.getReference().then((ref) => {
+    api.getReference(po.company).then((ref) => {
       setStockingLocations(ref.stockingLocations);
       setProducts(ref.products);
     });
@@ -255,7 +255,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     }
     setDeleting(true);
     try {
-      await api.deleteOrder(po.id);
+      await api.deleteOrder(po.id, po.company);
       onDeleted?.(po.id);
       onClose();
     } catch (e) {
@@ -272,7 +272,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     if (reason == null) return;
     setRevising(true);
     try {
-      const { po: next } = await api.revisePo(po.id, reason.trim() || undefined);
+      const { po: next } = await api.revisePo(po.id, reason.trim() || undefined, po.company);
       notifyPoUpdated();
       onUpdated(next);
       alert(`Revision ${next.rev} created. Update its quantities and prices, then run the pipeline again.`);
@@ -329,7 +329,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
       if (sumInv) payload.grossInvoiceValue = Math.round(sumInv * 100) / 100;
       else if (form.grossInvoiceValue === "") payload.grossInvoiceValue = null;
       if (!form.priority) payload.priority = "Standard";
-      const { po: updated } = await api.updateOrder(po.id, payload);
+      const { po: updated } = await api.updateOrder(po.id, payload, po.company);
       onUpdated(updated);
       setEditing(false);
     } catch (e) {
@@ -872,7 +872,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
                   {po.piNo && (
                     <div className="col-span-2 mt-1 flex flex-wrap gap-2">
-                      <PiPdfPreview poId={po.id} piNo={po.piNo} poNo={po.poNo} />
+                      <PiPdfPreview poId={po.id} piNo={po.piNo} poNo={po.poNo} company={po.company} />
                     </div>
                   )}
                 </Section>
@@ -933,7 +933,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   />
                   {po.ciNo && (
                     <div className="col-span-2 sm:col-span-4 mt-1">
-                      <CiExcelDownload poId={po.id} ciNo={po.ciNo} />
+                      <CiExcelDownload poId={po.id} ciNo={po.ciNo} company={po.company} />
                     </div>
                   )}
                 </Section>
@@ -1345,7 +1345,7 @@ function AdvanceButton({
 
   const regenDocNo = async (field: "piNo" | "ciNo") => {
     const type = field === "piNo" ? "pi" : "ci";
-    const { value } = await api.getNextDocNo(type, po.id);
+    const { value } = await api.getNextDocNo(type, po.id, po.company);
     setFields((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -1354,18 +1354,18 @@ function AdvanceButton({
     try {
       let lineCatalog: ReferenceData["shippingLines"] = [];
       if (nextStage === "BL") {
-        const ref = await api.getReference();
+        const ref = await api.getReference(po.company);
         lineCatalog = ref.shippingLines ?? [];
         setShippingLines(lineCatalog);
       }
 
       const initial = buildInitialAdvanceFields(po, nextStage, master, defs);
       if (nextStage === "PI Generated" && !initial.piNo) {
-        const { value } = await api.getNextDocNo("pi", po.id);
+        const { value } = await api.getNextDocNo("pi", po.id, po.company);
         initial.piNo = value;
       }
       if (nextStage === "CI sent" && !initial.ciNo) {
-        const { value } = await api.getNextDocNo("ci", po.id);
+        const { value } = await api.getNextDocNo("ci", po.id, po.company);
         initial.ciNo = value;
       }
       for (const f of defs) {
@@ -1399,7 +1399,7 @@ function AdvanceButton({
         nextStage,
         fields,
         note,
-      });
+      }, po.company);
       onUpdated(updated);
       setOpen(false);
     } catch (e) {
@@ -1598,7 +1598,7 @@ function RejectPiButton({
     }
     setSaving(true);
     try {
-      const { po: updated } = await api.rejectPi(po.id, trimmed);
+      const { po: updated } = await api.rejectPi(po.id, trimmed, po.company);
       onUpdated(updated);
       setOpen(false);
       setNote("");
@@ -1675,7 +1675,7 @@ function ResubmitPiButton({
   const submit = async () => {
     setSaving(true);
     try {
-      const { po: updated } = await api.resubmitPi(po.id, note.trim() || undefined);
+      const { po: updated } = await api.resubmitPi(po.id, note.trim() || undefined, po.company);
       onUpdated(updated);
       setOpen(false);
       setNote("");
@@ -1759,7 +1759,7 @@ function RejectCiButton({
     }
     setSaving(true);
     try {
-      const { po: updated } = await api.rejectCi(po.id, trimmed);
+      const { po: updated } = await api.rejectCi(po.id, trimmed, po.company);
       onUpdated(updated);
       setOpen(false);
       setNote("");
@@ -1836,7 +1836,7 @@ function ResubmitCiButton({
   const submit = async () => {
     setSaving(true);
     try {
-      const { po: updated } = await api.resubmitCi(po.id, note.trim() || undefined);
+      const { po: updated } = await api.resubmitCi(po.id, note.trim() || undefined, po.company);
       onUpdated(updated);
       setOpen(false);
       setNote("");
@@ -1901,13 +1901,13 @@ function ResubmitCiButton({
   );
 }
 
-function CiExcelDownload({ poId, ciNo }: { poId: number; ciNo?: string | null }) {
+function CiExcelDownload({ poId, ciNo, company }: { poId: number; ciNo?: string | null; company?: PurchaseOrder["company"] }) {
   const [loading, setLoading] = useState(false);
 
   const download = async () => {
     setLoading(true);
     try {
-      await api.downloadCiExcel(poId, ciNo);
+      await api.downloadCiExcel(poId, ciNo, company);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to download CI Excel");
     } finally {

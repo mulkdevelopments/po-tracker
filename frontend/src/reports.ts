@@ -102,20 +102,40 @@ export function dashboardActiveYearOrders(pos: PurchaseOrder[], year: number): P
   return dashboardYearOrders(pos, year).filter((p) => p.active !== false);
 }
 
+export type DashboardScope = WorkflowCompany | "BOTH";
+
+function workflowCompany(o: PurchaseOrder, scope: DashboardScope): WorkflowCompany {
+  if (scope !== "BOTH") return scope;
+  return o.company === "SYNERGY" ? "SYNERGY" : "UFP";
+}
+
+function pipelineLabels(scope: DashboardScope): string[] {
+  if (scope !== "BOTH") return getWorkflow(scope).map((g) => g.label);
+  const labels = getWorkflow("UFP").map((g) => g.label);
+  for (const group of getWorkflow("SYNERGY")) {
+    if (!labels.includes(group.label)) labels.push(group.label);
+  }
+  return labels;
+}
+
+export function orderStatusGroup(o: PurchaseOrder, scope: DashboardScope): string {
+  return reportGroupLabel(workflowCompany(o, scope), o.status);
+}
+
 export function computeDashboard(
   pos: PurchaseOrder[],
   ref: ReferenceData,
   year: number,
-  company: WorkflowCompany = "UFP",
+  company: DashboardScope = "UFP",
 ): DashboardReport {
   const inYear = dashboardYearOrders(pos, year);
   const active = dashboardActiveYearOrders(pos, year);
   const locations = ref.stockingLocations.map((l) => l.name);
   const countBy = (pred: (o: PurchaseOrder) => boolean) => locations.map((loc) => active.filter((o) => o.stockingLocation === loc && pred(o)).length);
 
-  const pipelineStages = getWorkflow(company).map((g) => g.label);
+  const pipelineStages = pipelineLabels(company);
   const statusRows = pipelineStages.map((stage) => {
-    const counts = countBy((o) => reportGroupLabel(company, o.status) === stage);
+    const counts = countBy((o) => orderStatusGroup(o, company) === stage);
     return { stage, counts, total: counts.reduce((a, b) => a + b, 0) };
   });
   const arrivedCounts = countBy((o) => has(o.arrivalDate));
@@ -262,13 +282,13 @@ export interface StatusSlice {
   count: number;
 }
 
-export function statusMix(pos: PurchaseOrder[], year: number, company: WorkflowCompany = "UFP"): StatusSlice[] {
+export function statusMix(pos: PurchaseOrder[], year: number, company: DashboardScope = "UFP"): StatusSlice[] {
   const active = dashboardActiveYearOrders(pos, year);
-  const pipelineStages = getWorkflow(company).map((g) => g.label);
+  const pipelineStages = pipelineLabels(company);
   return pipelineStages
     .map((status) => ({
       status,
-      count: active.filter((o) => reportGroupLabel(company, o.status) === status).length,
+      count: active.filter((o) => orderStatusGroup(o, company) === status).length,
     }))
     .filter((s) => s.count > 0);
 }

@@ -217,12 +217,14 @@ export function CapacityPanel({
   config,
   capacityPeriods = [],
   canEditMaster,
+  title,
 }: {
   pos: PurchaseOrder[];
   year: number;
   config: AppConfigData;
   capacityPeriods?: CapacityPeriod[];
   canEditMaster?: boolean;
+  title?: string;
 }) {
   const fallback = {
     lines: Number(config.productionLines) || 2,
@@ -249,7 +251,7 @@ export function CapacityPanel({
     <div className="bg-white rounded-lg border border-slate-200 p-4">
       <div className="flex items-center gap-3 mb-3">
         <div>
-          <div className="font-semibold text-slate-900">Production — Actual vs Capacity ({year})</div>
+          <div className="font-semibold text-slate-900">{title ?? `Production — Actual vs Capacity (${year})`}</div>
           <div className="text-xs text-slate-500">
             Containers shipped per month vs theoretical capacity
             {capacityPeriods.length > 0 ? " (uses capacity periods by month)." : "."} Current month pro-rated to today.

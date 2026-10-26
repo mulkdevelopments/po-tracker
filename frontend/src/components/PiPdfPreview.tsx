@@ -14,6 +14,7 @@ type Props = {
   poId: number;
   piNo?: string | null;
   poNo?: string | null;
+  company?: "UFP" | "SYNERGY";
   /** Extra classes on the trigger button. */
   className?: string;
   /** Label on the trigger. Defaults to "Preview PI". */
@@ -25,7 +26,7 @@ type Props = {
  * is saved to disk. Pages are drawn with PDF.js — the browser's own viewer
  * leaves these letterhead PDFs blank when they are shown from a blob URL.
  */
-export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Preview PI" }: Props) {
+export default function PiPdfPreview({ poId, piNo, poNo, company, className, label = "Preview PI" }: Props) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +46,7 @@ export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Pre
       setBytes(null);
       try {
         const doc: Doc = { piNo, poNo };
-        const result = await api.fetchPiPdf(poId, doc);
+        const result = await api.fetchPiPdf(poId, doc, company);
         if (cancelled) {
           URL.revokeObjectURL(result.url);
           return;
@@ -64,7 +65,7 @@ export default function PiPdfPreview({ poId, piNo, poNo, className, label = "Pre
     return () => {
       cancelled = true;
     };
-  }, [open, poId, piNo, poNo]);
+  }, [open, poId, piNo, poNo, company]);
 
   useEffect(() => {
     const host = hostRef.current;

@@ -32,8 +32,8 @@ export function getApiCompany(): Company {
   return currentCompany;
 }
 
-function companyParam(extra?: Record<string, string>) {
-  const params = new URLSearchParams({ company: currentCompany });
+function companyParam(extra?: Record<string, string>, company?: Company) {
+  const params = new URLSearchParams({ company: company ?? currentCompany });
   if (extra) {
     for (const [k, v] of Object.entries(extra)) params.set(k, v);
   }
@@ -114,16 +114,20 @@ export const api = {
   deleteUser: (id: string) =>
     request<{ ok: boolean }>(`/auth/users/${id}`, { method: "DELETE" }),
 
-  getOrders: () => request<{ pos: PurchaseOrder[]; company: Company }>(`/orders${companyParam()}`),
+  getOrders: (company?: Company) =>
+    request<{ pos: PurchaseOrder[]; company: Company }>(`/orders${companyParam(undefined, company)}`),
 
   getUploadMeta: () => request<{ nextSiNo: number }>(`/orders/upload-meta${companyParam()}`),
 
-  getNextDocNo: (type: "pi" | "ci", excludeId?: number) =>
+  getNextDocNo: (type: "pi" | "ci", excludeId?: number, company?: Company) =>
     request<{ type: string; value: string }>(
-      `/orders/next-doc-no${companyParam({
-        type,
-        ...(excludeId != null ? { excludeId: String(excludeId) } : {}),
-      })}`,
+      `/orders/next-doc-no${companyParam(
+        {
+          type,
+          ...(excludeId != null ? { excludeId: String(excludeId) } : {}),
+        },
+        company,
+      )}`,
     ),
 
   getOrder: (id: number) => request<{ po: PurchaseOrder }>(`/orders/${id}${companyParam()}`),
@@ -139,17 +143,17 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  updateOrder: (id: number, data: Record<string, unknown>) =>
-    request<{ po: PurchaseOrder }>(`/orders/${id}${companyParam()}`, {
+  updateOrder: (id: number, data: Record<string, unknown>, company?: Company) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}${companyParam(undefined, company)}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
 
-  deleteOrder: (id: number) =>
-    request<{ ok: boolean }>(`/orders/${id}${companyParam()}`, { method: "DELETE" }),
+  deleteOrder: (id: number, company?: Company) =>
+    request<{ ok: boolean }>(`/orders/${id}${companyParam(undefined, company)}`, { method: "DELETE" }),
 
-  advanceOrder: (id: number, data: Record<string, unknown>) =>
-    request<{ po: PurchaseOrder }>(`/orders/${id}/advance${companyParam()}`, {
+  advanceOrder: (id: number, data: Record<string, unknown>, company?: Company) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/advance${companyParam(undefined, company)}`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -160,26 +164,26 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  rejectPi: (id: number, note: string) =>
-    request<{ po: PurchaseOrder }>(`/orders/${id}/reject-pi${companyParam()}`, {
+  rejectPi: (id: number, note: string, company?: Company) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/reject-pi${companyParam(undefined, company)}`, {
       method: "POST",
       body: JSON.stringify({ note }),
     }),
 
-  resubmitPi: (id: number, note?: string) =>
-    request<{ po: PurchaseOrder }>(`/orders/${id}/resubmit-pi${companyParam()}`, {
+  resubmitPi: (id: number, note?: string, company?: Company) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/resubmit-pi${companyParam(undefined, company)}`, {
       method: "POST",
       body: JSON.stringify({ note }),
     }),
 
-  rejectCi: (id: number, note: string) =>
-    request<{ po: PurchaseOrder }>(`/orders/${id}/reject-ci${companyParam()}`, {
+  rejectCi: (id: number, note: string, company?: Company) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/reject-ci${companyParam(undefined, company)}`, {
       method: "POST",
       body: JSON.stringify({ note }),
     }),
 
-  resubmitCi: (id: number, note?: string) =>
-    request<{ po: PurchaseOrder }>(`/orders/${id}/resubmit-ci${companyParam()}`, {
+  resubmitCi: (id: number, note?: string, company?: Company) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/resubmit-ci${companyParam(undefined, company)}`, {
       method: "POST",
       body: JSON.stringify({ note }),
     }),
@@ -195,8 +199,8 @@ export const api = {
     }),
 
   /** Open the next revision of a PO, deactivating the superseded one. */
-  revisePo: (id: number, reason?: string) =>
-    request<{ po: PurchaseOrder }>(`/orders/${id}/revise${companyParam()}`, {
+  revisePo: (id: number, reason?: string, company?: Company) =>
+    request<{ po: PurchaseOrder }>(`/orders/${id}/revise${companyParam(undefined, company)}`, {
       method: "POST",
       body: JSON.stringify(reason ? { reason } : {}),
     }),
@@ -224,9 +228,9 @@ export const api = {
    * Fetch the PI PDF without saving it — used to show a preview first. Caller
    * must revoke `url` when finished.
    */
-  fetchPiPdf: async (id: number, doc?: { piNo?: string | null; poNo?: string | null }) => {
+  fetchPiPdf: async (id: number, doc?: { piNo?: string | null; poNo?: string | null }, company?: Company) => {
     const token = getToken();
-    const res = await fetch(`${API_BASE}/api/orders/${id}/pi-pdf${companyParam()}`, {
+    const res = await fetch(`${API_BASE}/api/orders/${id}/pi-pdf${companyParam(undefined, company)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       credentials: "include",
     });
@@ -249,9 +253,9 @@ export const api = {
     return { blob, filename };
   },
 
-  downloadCiExcel: async (id: number, ciNo?: string | null) => {
+  downloadCiExcel: async (id: number, ciNo?: string | null, company?: Company) => {
     const token = getToken();
-    const res = await fetch(`${API_BASE}/api/orders/${id}/ci-excel${companyParam()}`, {
+    const res = await fetch(`${API_BASE}/api/orders/${id}/ci-excel${companyParam(undefined, company)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       credentials: "include",
     });
@@ -274,7 +278,7 @@ export const api = {
       `/orders/export${companyParam()}`,
     ),
 
-  getReference: () => request<ReferenceData>(`/reference${companyParam()}`),
+  getReference: (company?: Company) => request<ReferenceData>(`/reference${companyParam(undefined, company)}`),
 
   updateConfig: (data: Record<string, number>) =>
     request<{ config: AppConfigData }>(`/reference/config${companyParam()}`, {
@@ -363,8 +367,10 @@ export const api = {
   refDelete: (entity: string, id: number) =>
     request<{ ok: boolean }>(`/reference/${entity}/${id}${companyParam()}`, { method: "DELETE" }),
 
-  getSettings: () =>
-    request<{ master: MasterData; pricing: PricingData; company: Company }>(`/settings${companyParam()}`),
+  getSettings: (company?: Company) =>
+    request<{ master: MasterData; pricing: PricingData; company: Company }>(
+      `/settings${companyParam(undefined, company)}`,
+    ),
 
   updateSettings: (data: Record<string, unknown>) =>
     request<{ master: MasterData; pricing: PricingData; company: Company }>(`/settings${companyParam()}`, {
