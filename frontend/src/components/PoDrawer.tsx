@@ -58,6 +58,7 @@ import {
   sumLineExtInv,
   sumLineExtPo,
 } from "../paymentFlags";
+import { applyPortCharges, rateForPort } from "../portCharges";
 
 function ModalPortal({ children }: { children: React.ReactNode }) {
   return createPortal(children, document.body);
@@ -123,6 +124,16 @@ function Field({ label, val }: { label: string; val: React.ReactNode }) {
   );
 }
 
+const SECTION_TINT: Record<string, string> = {
+  "PO received": "tint-order",
+  "Proforma invoice": "tint-pi",
+  "Down payment": "tint-pay",
+  "Shipping & CI": "tint-ship",
+  "Balance payment": "tint-pay",
+  "Telex / Seaway": "tint-release",
+  "Planning and production": "tint-prod",
+};
+
 function Section({
   title,
   children,
@@ -137,8 +148,9 @@ function Section({
   stack?: boolean;
 }) {
   const toneClass = tone === "under" ? "pay-under" : tone === "over" ? "pay-over" : "";
+  const tint = SECTION_TINT[title] ?? "";
   return (
-    <div className={`po-drawer-section ${toneClass}${wide ? " po-drawer-section-wide sm:col-span-2" : ""}`}>
+    <div className={`po-drawer-section ${tint} ${toneClass}${wide ? " po-drawer-section-wide sm:col-span-2" : ""}`}>
       <div className="po-drawer-section-title">{title}</div>
       <div className={stack ? "grid grid-cols-1 gap-2 text-sm" : "po-drawer-section-grid"}>{children}</div>
     </div>
@@ -211,7 +223,9 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const [active, setActive] = useState(true);
   const [lines, setLines] = useState<LineForm[]>([]);
   const [autoStatus, setAutoStatus] = useState(true);
-  const [stockingLocations, setStockingLocations] = useState<{ name: string; email: string | null }[]>([]);
+  const [stockingLocations, setStockingLocations] = useState<
+    { name: string; email: string | null; arrivalPort: string | null }[]
+  >([]);
   const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [tab, setTab] = useState<DrawerTab>("summary");
   const [editStageId, setEditStageId] = useState<string | null>(null);
@@ -238,6 +252,16 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const updateField = (k: string, v: string) => {
     setForm((prev) => {
       const next = { ...prev, [k]: v };
+      if (k === "stockingLocation") {
+        const loc = stockingLocations.find((l) => l.name.toLowerCase() === v.trim().toLowerCase());
+        if (loc?.arrivalPort) next.portOfDest = loc.arrivalPort;
+      }
+      if (k === "portOfDest" || (k === "stockingLocation" && next.portOfDest !== prev.portOfDest)) {
+        return applyPortCharges(
+          autoStatus && MILESTONE_KEYS.has(k) ? { ...next, status: deriveStatus(next, company) } : next,
+          true,
+        );
+      }
       if (autoStatus && MILESTONE_KEYS.has(k)) next.status = deriveStatus(next, company);
       if (CI_CHARGE_KEYS.has(k)) {
         const due = expectedBalanceDue(next);
@@ -294,7 +318,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
       }
     }
     f.notes = toStr(po.notes);
-    setForm(f);
+    setForm(applyPortCharges(f));
     setActive(po.active);
     setLines(
       po.lines.map((l) => {
@@ -489,21 +513,24 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
         {editing ? (
           <div className="px-5 py-4 space-y-4">
             {editSections.map((sec) => (
-              <div key={sec.title} className="border border-slate-200 rounded-lg p-3">
-                <div className="text-sm font-semibold text-slate-700 mb-2">{sec.title}</div>
+              <div
+                key={sec.title}
+                className={`rounded-lg border border-slate-200 p-3 ${SECTION_TINT[sec.title] ?? ""}`}
+              >
+                <div className="text-sm font-semibold text-slate-700 mb-3">{sec.title}</div>
                 <div
                   className={
                     sec.columns === 1
-                      ? "grid grid-cols-1 gap-3 max-w-sm"
+                      ? "grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3"
                       : "grid grid-cols-2 md:grid-cols-3 gap-3"
                   }
                 >
-                  {sec.fields.map((fld) => (
-                    <div key={fld.k as string}>
-                      <label className="text-xs text-slate-500 block mb-0.5">{fld.label}</label>
+                  {sec.fields.map((fld, i) => (
+                    <div key={fld.k as string} className={sec.columns === 1 && i === 0 ? "sm:col-span-2" : ""}>
+                      <label className="text-xs font-medium text-slate-600 block mb-1">{fld.label}</label>
                       {fld.type === "bool" ? (
                         <select
-                          className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
+                          className="w-full bg-white border border-slate-300 rounded-md px-2.5 py-2 text-sm"
                           value={active ? "Yes" : "No"}
                           onChange={(e) => setActive(e.target.value === "Yes")}
                         >
@@ -513,7 +540,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       ) : fld.type === "select" ? (
                         <>
                           <select
-                            className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
+                            className="w-full bg-white border border-slate-300 rounded-md px-2.5 py-2 text-sm"
                             value={form[fld.k as string] ?? ""}
                             onChange={(e) => {
                               if (fld.k === "status") setAutoStatus(false);
@@ -551,10 +578,21 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       ) : (
                         <input
                           type={fld.type === "number" ? "number" : fld.type === "date" ? "date" : "text"}
-                          className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
+                          className={`w-full bg-white border border-slate-300 rounded-md px-2.5 py-2 text-sm ${
+                            fld.k === "piNo" ? "font-medium tracking-wide" : ""
+                          }`}
                           value={form[fld.k as string] ?? ""}
                           onChange={(e) => updateField(fld.k as string, e.target.value)}
                         />
+                      )}
+                      {fld.k === "freight" && rateForPort(form.portOfDest) && (
+                        <p className="mt-1 text-[10px] leading-snug text-slate-400">
+                          {rateForPort(form.portOfDest)!.name}: {rateForPort(form.portOfDest)!.base.toLocaleString()} +{" "}
+                          {rateForPort(form.portOfDest)!.surcharge.toLocaleString()}
+                        </p>
+                      )}
+                      {fld.k === "inland" && rateForPort(form.portOfDest) && (
+                        <p className="mt-1 text-[10px] leading-snug text-slate-400">Always 1,000</p>
                       )}
                     </div>
                   ))}
@@ -873,7 +911,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
 
             {tab === "details" && (
               <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Section title="PI" stack>
+                <Section title="Proforma invoice" stack>
                   <Field label="PI #" val={po.piNo} />
                   <Field label="PI date" val={po.piDate} />
                   <Field label="PI value" val={fmtMoney(po.piValue)} />
@@ -900,7 +938,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                     </div>
                   )}
                 </Section>
-                <Section title="Container, shipping and commercial invoice" wide>
+                <Section title="Shipping & CI" wide>
                   <Field label="Container #" val={po.containerNo} />
                   <Field label="ETD" val={po.actualDeparture} />
                   <Field label="ETA" val={po.shippingEta} />
@@ -1207,8 +1245,14 @@ function buildInitialAdvanceFields(
     if (!out.ciDate) out.ciDate = todayISO();
     if (!out.ciValue && po.piValue != null) out.ciValue = String(po.piValue);
     else if (!out.ciValue && po.poValue != null) out.ciValue = String(po.poValue);
-    const due = expectedBalanceDue({ ...out, dpAmount: po.dpAmount });
-    out.balanceDue = due == null ? "" : String(due);
+    const charged = applyPortCharges({
+      ...out,
+      portOfDest: advanceVal(po.portOfDest),
+      dpAmount: out.dpAmount || advanceVal(po.dpAmount),
+    });
+    out.freight = charged.freight ?? "";
+    out.inland = charged.inland ?? "";
+    out.balanceDue = charged.balanceDue ?? "";
   }
   if (nextStage === "CI approved") {
     if (!out.ciApprovedDate) out.ciApprovedDate = todayISO();

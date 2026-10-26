@@ -58,8 +58,7 @@ export function getStageFieldDefs(master: MasterData): Record<string, StageField
     "CI sent": [
       { k: "ciNo", label: "CI Number", type: "text", autoNo: true },
       { k: "ciDate", label: "CI Date", type: "date", autoDate: true },
-      // Freight and inland are per-shipment actuals — request #17 removed the
-      // flat Master Data rates that used to pre-fill them.
+      // Filled from the destination port. Inland is always 1,000.
       { k: "freight", label: "Freight", type: "number" },
       { k: "inland", label: "Inland", type: "number" },
       { k: "ciValue", label: "CI Value (USD)", type: "number" },

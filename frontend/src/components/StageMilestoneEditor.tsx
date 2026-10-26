@@ -13,6 +13,7 @@ import { autoShippingUrl } from "../shippingTracking";
 import { getStageFieldDefs, STAGE_MILESTONE_KEYS, type StageFieldDef } from "../stageMilestones";
 import { notifyPoUpdated } from "../poEvents";
 import { expectedBalanceDue } from "../paymentFlags";
+import { applyPortCharges } from "../portCharges";
 import { derivedPlanningDate } from "../productionSchedule";
 
 function toStr(v: unknown): string {
@@ -27,6 +28,17 @@ function loadFields(po: PurchaseOrder, defs: StageFieldDef[]): Record<string, st
   const rec = po as unknown as Record<string, unknown>;
   const out: Record<string, string> = {};
   for (const f of defs) out[f.k] = toStr(rec[f.k]);
+  if ("freight" in out || "inland" in out) {
+    const charged = applyPortCharges({
+      ...out,
+      portOfDest: toStr(po.portOfDest),
+      dpAmount: "dpAmount" in out ? out.dpAmount : toStr(po.dpAmount),
+    });
+    if ("freight" in out) out.freight = charged.freight ?? "";
+    if ("inland" in out) out.inland = charged.inland ?? "";
+    if ("balanceDue" in out) out.balanceDue = charged.balanceDue ?? "";
+    return out;
+  }
   if ("balanceDue" in out) {
     const due = expectedBalanceDue({
       ...out,

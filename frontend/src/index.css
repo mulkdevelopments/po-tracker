@@ -522,14 +522,59 @@ button.pipeline-checklist-item {
   background: #fff;
 }
 
+/* Quiet wash + left bar so stacked sections read as separate groups. */
+.tint-order,
+.po-drawer-section.tint-order {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  box-shadow: inset 3px 0 0 #94a3b8;
+}
+
+.tint-pi,
+.po-drawer-section.tint-pi {
+  background: #f0f9ff;
+  border-color: #e0f2fe;
+  box-shadow: inset 3px 0 0 #38bdf8;
+}
+
+.tint-pay,
+.po-drawer-section.tint-pay {
+  background: #f0fdf4;
+  border-color: #dcfce7;
+  box-shadow: inset 3px 0 0 #34d399;
+}
+
+.tint-ship,
+.po-drawer-section.tint-ship {
+  background: #eef2ff;
+  border-color: #e0e7ff;
+  box-shadow: inset 3px 0 0 #818cf8;
+}
+
+.tint-release,
+.po-drawer-section.tint-release {
+  background: #fffbeb;
+  border-color: #fef3c7;
+  box-shadow: inset 3px 0 0 #fbbf24;
+}
+
+.tint-prod,
+.po-drawer-section.tint-prod {
+  background: #f5f3ff;
+  border-color: #ede9fe;
+  box-shadow: inset 3px 0 0 #a78bfa;
+}
+
 .po-drawer-section.pay-under {
   border-color: #fecaca;
   background: #fef2f2;
+  box-shadow: inset 3px 0 0 #f87171;
 }
 
 .po-drawer-section.pay-over {
   border-color: #fde68a;
   background: #fffbeb;
+  box-shadow: inset 3px 0 0 #f59e0b;
 }
 
 .po-drawer-section.pay-under .po-drawer-section-title {

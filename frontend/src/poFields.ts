@@ -39,7 +39,7 @@ export const DRAWER_SECTIONS: PoSection[] = [
     ],
   },
   {
-    title: "PI",
+    title: "Proforma invoice",
     columns: 1,
     fields: [
       { k: "piNo", label: "PI #" },
@@ -57,7 +57,7 @@ export const DRAWER_SECTIONS: PoSection[] = [
     ],
   },
   {
-    title: "Container, shipping and commercial invoice",
+    title: "Shipping & CI",
     fields: [
       { k: "containerNo", label: "Container #" },
       { k: "actualDeparture", label: "ETD", type: "date" },

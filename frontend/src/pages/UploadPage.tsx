@@ -29,6 +29,7 @@ import {
   poTotalMismatch,
 } from "../priceCompare";
 import { expectedBalanceDue } from "../paymentFlags";
+import { applyPortCharges } from "../portCharges";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -112,7 +113,7 @@ function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: b
   const lines = gLines.map(lineToForm);
   const totals = summarizeLines(lines);
   const custTotal = g.custPoTotal != null ? Number(g.custPoTotal) : NaN;
-  return {
+  return applyPortCharges({
     siNo: String(siNo),
     poNo: toStr(g.poNo),
     rev: toStr(g.rev ?? 0),
@@ -139,7 +140,7 @@ function guessToPayload(g: Record<string, unknown>, siNo: number, orderActive: b
     status: "PO Received",
     active: orderActive,
     lines: lines.map((l, idx) => ({ ...l, lineNo: l.lineNo || String(idx + 1) })),
-  };
+  });
 }
 
 export default function UploadPage() {
@@ -294,7 +295,16 @@ export default function UploadPage() {
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {
       const loc = ref?.stockingLocations.find((l) => l.name === v);
-      setForm((f) => ({ ...f, stockingLocation: v, portOfDest: loc?.arrivalPort ?? f.portOfDest }));
+      setForm((f) =>
+        applyPortCharges(
+          { ...f, stockingLocation: v, portOfDest: loc?.arrivalPort ?? f.portOfDest },
+          !!loc?.arrivalPort,
+        ),
+      );
+      return;
+    }
+    if (k === "portOfDest") {
+      setForm((f) => applyPortCharges({ ...f, portOfDest: v }, true));
       return;
     }
     if (k === "poDate") {
@@ -388,7 +398,7 @@ export default function UploadPage() {
     const formLines = gLines.map(lineToForm);
     const computed = summarizeLines(formLines);
     const custTotal = g.custPoTotal != null ? Number(g.custPoTotal) : NaN;
-    setForm((f) => ({
+    setForm((f) => applyPortCharges({
       ...f,
       poNo: toStr(g.poNo) || f.poNo,
       rev: g.rev != null ? toStr(g.rev) : f.rev,
@@ -415,7 +425,7 @@ export default function UploadPage() {
       totalM2: g.totalM2 != null ? toStr(g.totalM2) : (computed.totalM2 ? String(computed.totalM2) : f.totalM2),
       skids: g.skids != null ? toStr(g.skids) : (computed.skids ? String(computed.skids) : f.skids),
       status: "PO Received",
-    }));
+    }, true));
     setLines(formLines);
     if (batchPage != null) setActiveBatchPage(batchPage);
     const matched = Number(g.matchedCount) || 0;

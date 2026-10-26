@@ -21,6 +21,7 @@ import { nextCiNo, nextPiNo } from "../docNumbers.js";
 import { generatePiPdf } from "../piPdf.js";
 import { generateCiExcel } from "../ciExcel.js";
 import { balanceDueFromCi, completeLineMath, fillHeaderTotals, missingHeaderTotals } from "../lineMath.js";
+import { fillMissingPortCharges } from "../portCharges.js";
 import { escapeHtml, isEmailConfigured, parseEmailList, sendMail } from "../email.js";
 import {
   DEFAULT_LEAD_TIMES,
@@ -252,7 +253,7 @@ function poCreateData(
 ): Prisma.PurchaseOrderCreateInput {
   const completed = lines.map((l) => completeLineMath(l, sheetsPerSkid));
   return {
-    ...(fillHeaderTotals(withBalanceDue(poData), completed) as Prisma.PurchaseOrderUncheckedCreateInput),
+    ...(fillHeaderTotals(withBalanceDue(fillMissingPortCharges(poData)), completed) as Prisma.PurchaseOrderUncheckedCreateInput),
     company,
     lines: { create: completed },
   };
@@ -698,7 +699,10 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
 
   const { lines, ...poData } = parsed.data;
   const perSkid = await sheetsPerSkidFor(company);
-  const headerData = withBalanceDue(poData, existing as unknown as Record<string, unknown>);
+  const headerData = withBalanceDue(
+    fillMissingPortCharges(poData, existing as unknown as Record<string, unknown>),
+    existing as unknown as Record<string, unknown>,
+  );
   await prisma.$transaction(async (tx) => {
     await tx.purchaseOrder.update({ where: { id }, data: poUpdateData(headerData) });
     if (lines) {
