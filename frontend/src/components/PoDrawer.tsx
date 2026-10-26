@@ -15,7 +15,7 @@ import PiPdfPreview from "./PiPdfPreview";
 import PipelineProgress from "./PipelineProgress";
 import PipelineStepActions from "./PipelineStepActions";
 import StageMilestoneEditor from "./StageMilestoneEditor";
-import { PO_SECTIONS as EDIT_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
+import { DRAWER_SECTIONS as EDIT_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
 import { LINE_RECOMPUTE_KEYS, lineFormTotals } from "../lineMath";
 import {
   catalogMap,
@@ -128,17 +128,19 @@ function Section({
   children,
   tone,
   wide,
+  stack,
 }: {
   title: string;
   children: React.ReactNode;
   tone?: "under" | "over" | null;
   wide?: boolean;
+  stack?: boolean;
 }) {
   const toneClass = tone === "under" ? "pay-under" : tone === "over" ? "pay-over" : "";
   return (
     <div className={`po-drawer-section ${toneClass}${wide ? " po-drawer-section-wide sm:col-span-2" : ""}`}>
       <div className="po-drawer-section-title">{title}</div>
-      <div className="po-drawer-section-grid">{children}</div>
+      <div className={stack ? "grid grid-cols-1 gap-2 text-sm" : "po-drawer-section-grid"}>{children}</div>
     </div>
   );
 }
@@ -489,7 +491,13 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
             {editSections.map((sec) => (
               <div key={sec.title} className="border border-slate-200 rounded-lg p-3">
                 <div className="text-sm font-semibold text-slate-700 mb-2">{sec.title}</div>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div
+                  className={
+                    sec.columns === 1
+                      ? "grid grid-cols-1 gap-3 max-w-sm"
+                      : "grid grid-cols-2 md:grid-cols-3 gap-3"
+                  }
+                >
                   {sec.fields.map((fld) => (
                     <div key={fld.k as string}>
                       <label className="text-xs text-slate-500 block mb-0.5">{fld.label}</label>
@@ -650,7 +658,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
 
             {tab === "summary" && (
               <>
-                <PipelineProgress company={company} status={po.status} po={po} compact />
+                <PipelineProgress company={company} status={po.status} po={po} compact omitGroupIds={["planning"]} />
                 {payBannerTone && (
                   <div className={`po-drawer-pay-banner pay-${payBannerTone}`}>
                     {dpPayFlag && dpPayFlag.kind !== "ok" && (
@@ -715,7 +723,6 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                     <Field label="Gross invoice (m²)" val={fmtMoney(resolveGrossInvoiceValue(po))} />
                     <Field label="Total M²" val={fmtNum(po.totalM2, 2)} />
                     <Field label="Skids" val={po.skids} />
-                    <Field label="Production site" val={po.productionSite || "—"} />
                     <Field label="Active" val={po.active ? "Yes" : "No"} />
                   </div>
                 </div>
@@ -859,25 +866,27 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   po={po}
                   canEditStages={canEdit}
                   onSelectStage={(stageId) => setEditStageId(stageId)}
+                  omitGroupIds={["planning"]}
                 />
               </div>
             )}
 
             {tab === "details" && (
               <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Section title="Proforma invoice">
+                <Section title="PI" stack>
                   <Field label="PI #" val={po.piNo} />
                   <Field label="PI date" val={po.piDate} />
                   <Field label="PI value" val={fmtMoney(po.piValue)} />
                   <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
+                  <Field label="PI sent" val={po.piSent ? fmtDate(po.piSent) : null} />
                   {po.piNo && (
-                    <div className="col-span-2 mt-1 flex flex-wrap gap-2">
+                    <div className="mt-1 flex flex-wrap gap-2">
                       <PiPdfPreview poId={po.id} piNo={po.piNo} poNo={po.poNo} company={po.company} />
                     </div>
                   )}
                 </Section>
                 <Section
-                  title="Downpayment"
+                  title="Down payment"
                   tone={dpPayFlag && dpPayFlag.kind !== "ok" ? dpPayFlag.kind : null}
                 >
                   <Field label="DP date" val={po.dpDate} />
@@ -891,24 +900,14 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                     </div>
                   )}
                 </Section>
-                <Section title="Production & shipping" wide>
-                  <Field label="Site" val={po.productionSite} />
-                  <Field label="Start" val={po.productionStart} />
-                  <Field label="ETC" val={po.productionEtc} />
-                  <Field label="Complete" val={po.productionComplete} />
+                <Section title="Container, shipping and commercial invoice" wide>
                   <Field label="Container #" val={po.containerNo} />
                   <Field label="ETD" val={po.actualDeparture} />
                   <Field label="ETA" val={po.shippingEta} />
                   <Field label="ISF" val={po.isf} />
-                  {po.productionNotes && (
-                    <div className="col-span-2 sm:col-span-4">
-                      <Field label="Quality notes" val={po.productionNotes} />
-                    </div>
-                  )}
-                </Section>
-                <Section title="Commercial invoice & bill of lading" wide>
                   <Field label="CI #" val={po.ciNo} />
                   <Field label="CI date" val={po.ciDate} />
+                  <Field label="CI sent" val={po.revisionSent} />
                   <Field label="Freight" val={fmtMoney(po.freight)} />
                   <Field label="Inland" val={fmtMoney(po.inland)} />
                   <Field label="CI value" val={fmtMoney(po.ciValue)} />
@@ -952,6 +951,23 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       />
                     </div>
                   )}
+                </Section>
+                <Section title="Telex / Seaway" wide>
+                  <Field label="Telex / Seaway release" val={po.telexDate ? fmtDate(po.telexDate) : null} />
+                  <Field label="Arrival at port" val={po.arrivalDate ? fmtDate(po.arrivalDate) : null} />
+                </Section>
+                <Section title="Planning and production" wide>
+                  <Field label="Production complete" val={po.productionComplete ? fmtDate(po.productionComplete) : null} />
+                  <Field label="Production status" val={po.productionStatus} />
+                  <Field label="Quality" val={po.productionNotes} />
+                  <Field label="Production start" val={po.productionStart ? fmtDate(po.productionStart) : null} />
+                  <Field label="Production ETC" val={po.productionEtc ? fmtDate(po.productionEtc) : null} />
+                  <Field label="SO #" val={po.soNo} />
+                  <Field label="Standard colors only" val={po.standardColorsOnly} />
+                  <Field label="All material available" val={po.allMaterialAvailable} />
+                  <Field label="Production sequence" val={po.productionSequence} />
+                  <Field label="Production begin" val={po.productionBegin ? fmtDate(po.productionBegin) : null} />
+                  <Field label="Dispatch from factory" val={po.dispatchFromFactory ? fmtDate(po.dispatchFromFactory) : null} />
                 </Section>
               </div>
             )}

@@ -10,8 +10,111 @@ export interface FieldDef {
   options?: string[];
 }
 
+export interface PoSection {
+  title: string;
+  /** 1 stacks the fields in a single column. */
+  columns?: 1 | 2 | 3;
+  fields: FieldDef[];
+}
+
+/** Edit-dialog grouping. The upload form keeps the older PO_SECTIONS list. */
+export const DRAWER_SECTIONS: PoSection[] = [
+  {
+    title: "PO received",
+    fields: [
+      { k: "siNo", label: "SI No.", type: "number" },
+      { k: "poNo", label: "PO #" },
+      { k: "rev", label: "Rev #", type: "number" },
+      { k: "status", label: "Order Status", type: "select", options: flatStageIds("UFP") },
+      { k: "poDate", label: "Date Ordered (PO Date)", type: "date" },
+      { k: "active", label: "Active", type: "bool" },
+      { k: "skids", label: "Qty of Skids", type: "number" },
+      { k: "stockingLocation", label: "Stocking Location" },
+      { k: "portOfDest", label: "Port of Destination" },
+      { k: "priority", label: "Priority", type: "select", options: ["Standard", "High"] },
+      { k: "poValue", label: "PO Value $ (our price list)", type: "number" },
+      { k: "custPoTotal", label: "PO Value $ (as printed on PO)", type: "number" },
+      { k: "grossInvoiceValue", label: "Gross Invoice Value $ (m²)", type: "number" },
+      { k: "totalM2", label: "Total M2", type: "number" },
+    ],
+  },
+  {
+    title: "PI",
+    columns: 1,
+    fields: [
+      { k: "piNo", label: "PI #" },
+      { k: "piDate", label: "PI Date", type: "date" },
+      { k: "piValue", label: "PI Value $", type: "number" },
+      { k: "piApprovedDate", label: "PI Approved", type: "date" },
+      { k: "piSent", label: "PI Sent", type: "date" },
+    ],
+  },
+  {
+    title: "Down payment",
+    fields: [
+      { k: "dpDate", label: "Downpayment Date", type: "date" },
+      { k: "dpAmount", label: "Downpayment Amount Received", type: "number" },
+    ],
+  },
+  {
+    title: "Container, shipping and commercial invoice",
+    fields: [
+      { k: "containerNo", label: "Container #" },
+      { k: "actualDeparture", label: "ETD", type: "date" },
+      { k: "shippingEta", label: "ETA", type: "date" },
+      { k: "isf", label: "ISF" },
+      { k: "ciNo", label: "Commercial Invoice #" },
+      { k: "ciDate", label: "Commercial Invoice Date", type: "date" },
+      { k: "revisionSent", label: "CI sent" },
+      { k: "freight", label: "Freight", type: "number" },
+      { k: "inland", label: "Inland", type: "number" },
+      { k: "ciValue", label: "Commercial Invoice Value (Net)", type: "number" },
+      { k: "balanceDue", label: "Balance Due", type: "number" },
+      { k: "ciApprovedDate", label: "CI Approved", type: "date" },
+      { k: "bol", label: "BOL / SWBOL" },
+      { k: "shippingLine", label: "Shipping Line" },
+      { k: "shippingUrl", label: "Tracking URL", type: "url" },
+    ],
+  },
+  {
+    title: "Balance payment",
+    fields: [
+      { k: "bpDate", label: "Balance Payment Date", type: "date" },
+      { k: "bpAmount", label: "Balance Amount Received", type: "number" },
+    ],
+  },
+  {
+    title: "Telex / Seaway",
+    fields: [
+      { k: "telexDate", label: "Telex / Seaway Release Date", type: "date" },
+      { k: "arrivalDate", label: "Actual Arrival at Port", type: "date" },
+    ],
+  },
+  {
+    title: "Planning and production",
+    fields: [
+      { k: "productionComplete", label: "Production Complete Date", type: "date" },
+      {
+        k: "productionStatus",
+        label: "Production Status",
+        type: "select",
+        options: ["", "UNDER PRODUCTION", "PRODUCTION COMPLETE", "CONTAINER BOOKED", "ON HOLD", "SHIPPED"],
+      },
+      { k: "productionNotes", label: "Quality" },
+      { k: "productionStart", label: "Production Start", type: "date" },
+      { k: "productionEtc", label: "Production ETC (in Container)", type: "date" },
+      { k: "soNo", label: "SO #" },
+      { k: "standardColorsOnly", label: "Standard Colors Only?" },
+      { k: "allMaterialAvailable", label: "All Material Available" },
+      { k: "productionSequence", label: "Production Sequence", type: "number" },
+      { k: "productionBegin", label: "Production Begin", type: "date" },
+      { k: "dispatchFromFactory", label: "Dispatch from Factory", type: "date" },
+    ],
+  },
+];
+
 // All PurchaseOrder header fields, grouped to match the Order Tracker layout.
-export const PO_SECTIONS: { title: string; fields: FieldDef[] }[] = [
+export const PO_SECTIONS: PoSection[] = [
   {
     title: "Order (PO Received)",
     fields: [

@@ -22,6 +22,8 @@ interface Props {
   /** When set, steps are clickable to edit milestone fields */
   onSelectStage?: (stageId: string) => void;
   canEditStages?: boolean;
+  /** Group ids left off this timeline (drawer hides Planning). */
+  omitGroupIds?: string[];
 }
 
 function CheckIcon() {
@@ -54,10 +56,11 @@ export default function PipelineProgress({
   compact = false,
   onSelectStage,
   canEditStages = false,
+  omitGroupIds,
 }: Props) {
   const resolved = resolvePipelineStatus(status);
   const isException = (EXCEPTION_STATUSES as readonly string[]).includes(status);
-  const workflow = getWorkflow(company);
+  const workflow = getWorkflow(company).filter((group) => !omitGroupIds?.includes(group.id));
   const poRec = po as unknown as Record<string, unknown>;
   const percent = pipelineProgressPercent(company, poRec);
   const activeGroups = getActiveWorkflowGroups(company, poRec);
