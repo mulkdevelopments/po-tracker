@@ -1066,3 +1066,14 @@ button.pipeline-checklist-item {
   padding: 10px;
 }
 
+.filter-pop-item.is-active {
+  background: #eef2ff;
+}
+
+.excel-grid .th-filter:focus-visible {
+  outline: 2px solid #d97706;
+  outline-offset: 1px;
+  color: #475569;
+  background: #e2e8f0;
+}
+

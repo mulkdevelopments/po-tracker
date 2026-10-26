@@ -161,6 +161,7 @@ export default function OrdersPage() {
   const [filters, setFilters] = useState<Record<string, ColFilter>>({});
   const [openCol, setOpenCol] = useState<string | null>(null);
   const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
+  const filterOpenerRef = useRef<HTMLButtonElement | null>(null);
   const [stockingEmailFilterActive, setStockingEmailFilterActive] = useState(false);
   const [piDueFilterActive, setPiDueFilterActive] = useState(false);
 
@@ -310,16 +311,28 @@ export default function OrdersPage() {
     (f) => f.search || f.selected.length,
   ).length;
 
-  const openFilter = (e: React.MouseEvent, key: string) => {
-    e.stopPropagation();
+  const placeFilter = (el: HTMLElement, key: string) => {
+    filterOpenerRef.current = el as HTMLButtonElement;
+    const rect = el.getBoundingClientRect();
+    const left = Math.min(rect.left, window.innerWidth - 300);
+    setPopPos({ top: rect.bottom + 4, left: Math.max(8, left) });
+    setOpenCol(key);
+  };
+
+  const openFilter = (el: HTMLElement, key: string) => {
     if (openCol === key) {
       setOpenCol(null);
       return;
     }
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const left = Math.min(rect.left, window.innerWidth - 300);
-    setPopPos({ top: rect.bottom + 4, left: Math.max(8, left) });
-    setOpenCol(key);
+    placeFilter(el, key);
+  };
+
+  const closeFilter = (restoreFocus = false) => {
+    setOpenCol(null);
+    if (restoreFocus) {
+      const el = filterOpenerRef.current;
+      requestAnimationFrame(() => el?.focus());
+    }
   };
 
   const setColFilter = (key: string, patch: Partial<ColFilter>) => {
@@ -547,8 +560,23 @@ export default function OrdersPage() {
                         <button
                           type="button"
                           className={`th-filter ${active ? "th-filter-active" : ""}`}
-                          onClick={(e) => openFilter(e, col.key as string)}
                           aria-label={`Filter ${col.label}`}
+                          aria-haspopup="dialog"
+                          aria-expanded={openCol === (col.key as string)}
+                          aria-keyshortcuts="Alt+ArrowDown"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openFilter(e.currentTarget, col.key as string);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.altKey && e.key === "ArrowDown") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (openCol !== (col.key as string)) {
+                                placeFilter(e.currentTarget, col.key as string);
+                              }
+                            }
+                          }}
                         >
                           <ListFilter size={13} />
                         </button>
@@ -631,7 +659,8 @@ export default function OrdersPage() {
           onToggle={(v) => toggleValue(openCol, v)}
           onSelectAll={() => setColFilter(openCol, { selected: [] })}
           onClear={() => setColFilter(openCol, { search: "", selected: [] })}
-          onClose={() => setOpenCol(null)}
+          onClose={() => closeFilter(false)}
+          onEscape={() => closeFilter(true)}
         />
       )}
 
@@ -667,6 +696,7 @@ function FilterPopover({
   onSelectAll,
   onClear,
   onClose,
+  onEscape,
 }: {
   col: Col;
   values: string[];
@@ -677,9 +707,16 @@ function FilterPopover({
   onSelectAll: () => void;
   onClear: () => void;
   onClose: () => void;
+  onEscape: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLInputElement | null>>([]);
   const [valSearch, setValSearch] = useState("");
+  const [active, setActive] = useState(-1);
+  const onToggleRef = useRef(onToggle);
+  const onEscapeRef = useRef(onEscape);
+  onToggleRef.current = onToggle;
+  onEscapeRef.current = onEscape;
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -692,12 +729,88 @@ function FilterPopover({
   const shown = values.filter((v) =>
     valSearch ? (v || "(blank)").toLowerCase().includes(valSearch.toLowerCase()) : true,
   );
+  const shownRef = useRef(shown);
+  const activeRef = useRef(active);
+  shownRef.current = shown;
+  activeRef.current = active;
+
+  useEffect(() => {
+    activeRef.current = -1;
+    setActive(-1);
+  }, [valSearch]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const pop = ref.current;
+      if (!pop) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onEscapeRef.current();
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      const typing =
+        !!target &&
+        pop.contains(target) &&
+        target.tagName === "INPUT" &&
+        (target as HTMLInputElement).type !== "checkbox";
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        const opener = document.querySelector<HTMLElement>(".th-filter[aria-expanded='true']");
+        const focusInside =
+          pop.contains(document.activeElement) || document.activeElement === opener;
+        if (!focusInside) return;
+        const list = shownRef.current;
+        if (!list.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const cur = activeRef.current;
+        const next =
+          e.key === "ArrowDown"
+            ? cur < 0
+              ? 0
+              : Math.min(list.length - 1, cur + 1)
+            : cur < 0
+              ? list.length - 1
+              : Math.max(0, cur - 1);
+        activeRef.current = next;
+        setActive(next);
+        const el = itemRefs.current[next];
+        el?.focus();
+        el?.scrollIntoView({ block: "nearest" });
+        return;
+      }
+      if (e.key === " " && !typing && activeRef.current >= 0 && target?.closest(".filter-pop-item")) {
+        const list = shownRef.current;
+        const value = list[activeRef.current];
+        if (value === undefined) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onToggleRef.current(value);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (e.key === " " && target?.closest(".filter-pop-item")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("keyup", onKeyUp, true);
+    };
+  }, []);
 
   return (
     <div
       ref={ref}
       className="filter-pop"
       style={{ top: pos.top, left: pos.left }}
+      role="dialog"
+      aria-label={`Filter ${col.label}`}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="text-xs font-semibold text-slate-700 mb-2 truncate">{col.label}</div>
@@ -722,15 +835,27 @@ function FilterPopover({
           Clear
         </button>
       </div>
-      <div className="max-h-52 overflow-auto border border-slate-100 rounded-md">
-        {shown.map((v) => {
+      <div className="max-h-52 overflow-auto border border-slate-100 rounded-md" role="listbox" aria-multiselectable="true">
+        {shown.map((v, i) => {
           const checked = filter.selected.length === 0 || filter.selected.includes(v);
           return (
-            <label key={v || "(blank)"} className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-slate-50 cursor-pointer">
+            <label
+              key={v || "(blank)"}
+              className={`filter-pop-item flex items-center gap-2 px-2 py-1 text-xs hover:bg-slate-50 cursor-pointer ${active === i ? "is-active" : ""}`}
+              role="option"
+              aria-selected={filter.selected.includes(v)}
+            >
               <input
+                ref={(el) => {
+                  itemRefs.current[i] = el;
+                }}
                 type="checkbox"
                 checked={filter.selected.includes(v)}
                 onChange={() => onToggle(v)}
+                onFocus={() => {
+                  activeRef.current = i;
+                  setActive(i);
+                }}
               />
               <span className={`truncate ${!checked ? "text-slate-400" : ""}`}>{v || "(blank)"}</span>
             </label>
