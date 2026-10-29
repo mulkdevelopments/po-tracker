@@ -30,6 +30,7 @@ import {
 } from "../priceCompare";
 import { expectedBalanceDue } from "../paymentFlags";
 import { applyPortCharges } from "../portCharges";
+import { matchStockingLocation } from "../stockingLocation";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -294,10 +295,14 @@ export default function UploadPage() {
 
   const setField = (k: string, v: string) => {
     if (k === "stockingLocation") {
-      const loc = ref?.stockingLocations.find((l) => l.name === v);
+      const loc = matchStockingLocation(ref?.stockingLocations ?? [], v);
       setForm((f) =>
         applyPortCharges(
-          { ...f, stockingLocation: v, portOfDest: loc?.arrivalPort ?? f.portOfDest },
+          {
+            ...f,
+            stockingLocation: loc?.name ?? v,
+            portOfDest: loc?.arrivalPort ?? f.portOfDest,
+          },
           !!loc?.arrivalPort,
         ),
       );
@@ -398,13 +403,16 @@ export default function UploadPage() {
     const formLines = gLines.map(lineToForm);
     const computed = summarizeLines(formLines);
     const custTotal = g.custPoTotal != null ? Number(g.custPoTotal) : NaN;
-    setForm((f) => applyPortCharges({
+    setForm((f) => {
+      const named = toStr(g.stockingLocation) || f.stockingLocation;
+      const loc = matchStockingLocation(ref?.stockingLocations ?? [], named);
+      return applyPortCharges({
       ...f,
       poNo: toStr(g.poNo) || f.poNo,
       rev: g.rev != null ? toStr(g.rev) : f.rev,
       poDate: toStr(g.poDate) || f.poDate || todayISO(),
-      stockingLocation: toStr(g.stockingLocation) || f.stockingLocation,
-      portOfDest: toStr(g.portOfDest) || f.portOfDest,
+      stockingLocation: loc?.name || named,
+      portOfDest: loc?.arrivalPort || toStr(g.portOfDest) || f.portOfDest,
       concat: toStr(g.concat) || f.concat,
       poValue: computed.poValue
         ? String(Math.round(computed.poValue * 100) / 100)
@@ -425,7 +433,8 @@ export default function UploadPage() {
       totalM2: g.totalM2 != null ? toStr(g.totalM2) : (computed.totalM2 ? String(computed.totalM2) : f.totalM2),
       skids: g.skids != null ? toStr(g.skids) : (computed.skids ? String(computed.skids) : f.skids),
       status: "PO Received",
-    }, true));
+    }, Boolean(loc?.arrivalPort));
+    });
     setLines(formLines);
     if (batchPage != null) setActiveBatchPage(batchPage);
     const matched = Number(g.matchedCount) || 0;
@@ -681,11 +690,25 @@ export default function UploadPage() {
       );
     }
     if (k === "stockingLocation") {
+      const current = form.stockingLocation ?? "";
+      const known = matchStockingLocation(ref?.stockingLocations ?? [], current);
       return (
-        <select value={form.stockingLocation} onChange={(e) => setField("stockingLocation", e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+        <select value={current} onChange={(e) => setField("stockingLocation", e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm">
           <option value="">—</option>
+          {current && !known && <option value={current}>{current}</option>}
           {(ref?.stockingLocations ?? []).map((l) => <option key={l.id} value={l.name}>{l.name}</option>)}
         </select>
+      );
+    }
+    if (k === "portOfDest") {
+      return (
+        <input
+          type="text"
+          readOnly
+          value={form.portOfDest ?? ""}
+          className={readOnlyCls}
+          title="Filled from the stocking location in Master Data"
+        />
       );
     }
     if (k === "shippingLine") {

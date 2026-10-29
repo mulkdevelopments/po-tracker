@@ -18,7 +18,7 @@ export function getStageFieldDefs(master: MasterData): Record<string, StageField
     Planning: [
       { k: "planningDate", label: "Planning date", type: "date", autoDate: true },
       { k: "productionSite", label: "Production site", type: "select", options: master.uaeSites || [] },
-      { k: "stockingLocation", label: "Stocking location", type: "text" },
+      { k: "stockingLocation", label: "Stocking location", type: "select" },
     ],
     "PI Generated": [
       { k: "piNo", label: "PI Number", type: "text", autoNo: true },

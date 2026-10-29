@@ -59,6 +59,7 @@ import {
   sumLineExtPo,
 } from "../paymentFlags";
 import { applyPortCharges, rateForPort } from "../portCharges";
+import { matchStockingLocation } from "../stockingLocation";
 
 function ModalPortal({ children }: { children: React.ReactNode }) {
   return createPortal(children, document.body);
@@ -237,6 +238,21 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   }, [po.id]);
 
   useEffect(() => {
+    if (!editing || stockingLocations.length === 0) return;
+    setForm((prev) => {
+      const loc = matchStockingLocation(stockingLocations, prev.stockingLocation ?? "");
+      if (!loc) return prev;
+      const port = loc.arrivalPort ?? prev.portOfDest ?? "";
+      if (prev.stockingLocation === loc.name && (prev.portOfDest ?? "") === port) return prev;
+      const portChanged = Boolean(loc.arrivalPort) && (prev.portOfDest ?? "") !== port;
+      return applyPortCharges(
+        { ...prev, stockingLocation: loc.name, portOfDest: port },
+        portChanged,
+      );
+    });
+  }, [editing, stockingLocations]);
+
+  useEffect(() => {
     api.getReference(po.company).then((ref) => {
       setStockingLocations(ref.stockingLocations);
       setProducts(ref.products);
@@ -253,8 +269,11 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     setForm((prev) => {
       const next = { ...prev, [k]: v };
       if (k === "stockingLocation") {
-        const loc = stockingLocations.find((l) => l.name.toLowerCase() === v.trim().toLowerCase());
-        if (loc?.arrivalPort) next.portOfDest = loc.arrivalPort;
+        const loc = matchStockingLocation(stockingLocations, v);
+        if (loc) {
+          next.stockingLocation = loc.name;
+          if (loc.arrivalPort) next.portOfDest = loc.arrivalPort;
+        }
       }
       if (k === "portOfDest" || (k === "stockingLocation" && next.portOfDest !== prev.portOfDest)) {
         return applyPortCharges(
@@ -318,7 +337,16 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
       }
     }
     f.notes = toStr(po.notes);
-    setForm(applyPortCharges(f));
+    const loc = matchStockingLocation(stockingLocations, f.stockingLocation ?? "");
+    let portChanged = false;
+    if (loc) {
+      f.stockingLocation = loc.name;
+      if (loc.arrivalPort && f.portOfDest !== loc.arrivalPort) {
+        f.portOfDest = loc.arrivalPort;
+        portChanged = true;
+      }
+    }
+    setForm(applyPortCharges(f, portChanged));
     setActive(po.active);
     setLines(
       po.lines.map((l) => {
@@ -566,6 +594,44 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                               Auto-set from milestones
                             </label>
                           )}
+                        </>
+                      ) : fld.k === "stockingLocation" ? (
+                        <>
+                          <select
+                            className="w-full bg-white border border-slate-300 rounded-md px-2.5 py-2 text-sm"
+                            value={form.stockingLocation ?? ""}
+                            onChange={(e) => updateField("stockingLocation", e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {form.stockingLocation &&
+                              !matchStockingLocation(stockingLocations, form.stockingLocation) && (
+                                <option value={form.stockingLocation}>{form.stockingLocation}</option>
+                              )}
+                            {stockingLocations.map((l) => (
+                              <option key={l.name} value={l.name}>
+                                {l.name}
+                              </option>
+                            ))}
+                          </select>
+                          {form.stockingLocation &&
+                            !matchStockingLocation(stockingLocations, form.stockingLocation) && (
+                              <p className="mt-1 text-[10px] leading-snug text-amber-700">
+                                Not in Master Data. Pick a location to fill the port.
+                              </p>
+                            )}
+                        </>
+                      ) : fld.k === "portOfDest" ? (
+                        <>
+                          <input
+                            type="text"
+                            readOnly
+                            value={form.portOfDest ?? ""}
+                            className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-slate-50 text-slate-600"
+                            title="Filled from the stocking location in Master Data"
+                          />
+                          <p className="mt-1 text-[10px] leading-snug text-slate-400">
+                            From the stocking location
+                          </p>
                         </>
                       ) : fld.k === "balanceDue" ? (
                         <input
@@ -1299,6 +1365,7 @@ function AdvanceButton({
   const [open, setOpen] = useState(false);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [shippingLines, setShippingLines] = useState<ReferenceData["shippingLines"]>([]);
+  const [stockingLocations, setStockingLocations] = useState<ReferenceData["stockingLocations"]>([]);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1321,6 +1388,10 @@ function AdvanceButton({
         const due = expectedBalanceDue({ ...next, dpAmount: next.dpAmount ?? po.dpAmount });
         next.balanceDue = due == null ? "" : String(due);
       }
+      if (key === "stockingLocation") {
+        const loc = matchStockingLocation(stockingLocations, value);
+        if (loc) next.stockingLocation = loc.name;
+      }
       if (nextStage === "BL" && (key === "bol" || key === "shippingLine")) {
         return applyBlTrackingUrl(next, shippingLines);
       }
@@ -1332,7 +1403,7 @@ function AdvanceButton({
     Planning: [
       { k: "planningDate", label: "Planning date", type: "date", autoDate: true },
       { k: "productionSite", label: "Production site", type: "select", options: master.uaeSites || [] },
-      { k: "stockingLocation", label: "Stocking location", type: "text" },
+      { k: "stockingLocation", label: "Stocking location", type: "select" },
     ],
     "PI Generated": [
       { k: "piNo", label: "PI Number", type: "text", autoNo: true },
@@ -1413,13 +1484,24 @@ function AdvanceButton({
     setLoading(true);
     try {
       let lineCatalog: ReferenceData["shippingLines"] = [];
-      if (nextStage === "BL") {
+      let locations: ReferenceData["stockingLocations"] = [];
+      if (nextStage === "BL" || nextStage === "Planning") {
         const ref = await api.getReference(po.company);
-        lineCatalog = ref.shippingLines ?? [];
-        setShippingLines(lineCatalog);
+        if (nextStage === "BL") {
+          lineCatalog = ref.shippingLines ?? [];
+          setShippingLines(lineCatalog);
+        }
+        if (nextStage === "Planning") {
+          locations = ref.stockingLocations ?? [];
+          setStockingLocations(locations);
+        }
       }
 
       const initial = buildInitialAdvanceFields(po, nextStage, master, defs);
+      if (nextStage === "Planning") {
+        const loc = matchStockingLocation(locations, initial.stockingLocation ?? po.stockingLocation ?? "");
+        if (loc) initial.stockingLocation = loc.name;
+      }
       if (nextStage === "PI Generated" && !initial.piNo) {
         const { value } = await api.getNextDocNo("pi", po.id, po.company);
         initial.piNo = value;
@@ -1455,9 +1537,31 @@ function AdvanceButton({
   const submit = async () => {
     setSaving(true);
     try {
+      const payload = { ...fields };
+      const loc = matchStockingLocation(stockingLocations, fields.stockingLocation ?? "");
+      if (loc?.arrivalPort && (po.portOfDest ?? "") !== loc.arrivalPort) {
+        const charged = applyPortCharges(
+          {
+            portOfDest: loc.arrivalPort,
+            ciValue: po.ciValue,
+            freight: po.freight,
+            inland: po.inland,
+            dpAmount: po.dpAmount,
+          },
+          true,
+        );
+        payload.stockingLocation = loc.name;
+        payload.portOfDest = loc.arrivalPort;
+        payload.freight = charged.freight ?? "";
+        payload.inland = charged.inland ?? "";
+        payload.balanceDue = charged.balanceDue ?? "";
+      } else if (loc) {
+        payload.stockingLocation = loc.name;
+        if (loc.arrivalPort) payload.portOfDest = loc.arrivalPort;
+      }
       const { po: updated } = await api.advanceOrder(po.id, {
         nextStage,
-        fields,
+        fields: payload,
         note,
       }, po.company);
       onUpdated(updated);
@@ -1576,9 +1680,16 @@ function AdvanceButton({
                   onChange={(e) => updateDialogField(f.k, e.target.value)}
                 >
                   <option value="">—</option>
-                  {(nextStage === "BL" && f.k === "shippingLine"
-                    ? shippingLines.map((l) => l.name)
-                    : f.options || []
+                  {f.k === "stockingLocation" &&
+                    fields.stockingLocation &&
+                    !matchStockingLocation(stockingLocations, fields.stockingLocation) && (
+                      <option value={fields.stockingLocation}>{fields.stockingLocation}</option>
+                    )}
+                  {(f.k === "stockingLocation"
+                    ? stockingLocations.map((l) => l.name)
+                    : nextStage === "BL" && f.k === "shippingLine"
+                      ? shippingLines.map((l) => l.name)
+                      : f.options || []
                   ).map((o) => (
                     <option key={o} value={o}>
                       {o}

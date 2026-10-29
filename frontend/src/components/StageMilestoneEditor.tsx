@@ -14,6 +14,7 @@ import { getStageFieldDefs, STAGE_MILESTONE_KEYS, type StageFieldDef } from "../
 import { notifyPoUpdated } from "../poEvents";
 import { expectedBalanceDue } from "../paymentFlags";
 import { applyPortCharges } from "../portCharges";
+import { matchStockingLocation } from "../stockingLocation";
 import { derivedPlanningDate } from "../productionSchedule";
 
 function toStr(v: unknown): string {
@@ -70,11 +71,35 @@ export default function StageMilestoneEditor({
   const label = getSubstageLabel(company, stageId);
   const [fields, setFields] = useState<Record<string, string>>(() => loadFields(po, defs));
   const [shippingLines, setShippingLines] = useState<ReferenceData["shippingLines"]>([]);
+  const [stockingLocations, setStockingLocations] = useState<ReferenceData["stockingLocations"]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(stageId === "BL");
   const [updateStatus, setUpdateStatus] = useState(
     !(EXCEPTION_STATUSES as readonly string[]).includes(po.status),
   );
+
+  useEffect(() => {
+    if (!defs.some((f) => f.k === "stockingLocation")) return;
+    let cancelled = false;
+    void api
+      .getReference(po.company)
+      .then((ref) => {
+        if (!cancelled) setStockingLocations(ref.stockingLocations ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [po.company, stageId]);
+
+  useEffect(() => {
+    if (stockingLocations.length === 0) return;
+    setFields((prev) => {
+      const loc = matchStockingLocation(stockingLocations, prev.stockingLocation ?? "");
+      if (!loc || prev.stockingLocation === loc.name) return prev;
+      return { ...prev, stockingLocation: loc.name };
+    });
+  }, [stockingLocations]);
 
   useEffect(() => {
     if (stageId !== "BL") return;
@@ -110,6 +135,10 @@ export default function StageMilestoneEditor({
           dpAmount: "dpAmount" in next ? next.dpAmount : po.dpAmount,
         });
         next.balanceDue = due == null ? "" : String(due);
+      }
+      if (key === "stockingLocation") {
+        const loc = matchStockingLocation(stockingLocations, value);
+        if (loc) next.stockingLocation = loc.name;
       }
       if (stageId === "BL" && (key === "bol" || key === "shippingLine")) {
         return applyBlTrackingUrl(next);
@@ -167,6 +196,27 @@ export default function StageMilestoneEditor({
     setSaving(true);
     try {
       const payload: Record<string, unknown> = { ...fields };
+      const loc = matchStockingLocation(stockingLocations, fields.stockingLocation ?? "");
+      if (loc?.arrivalPort && (po.portOfDest ?? "") !== loc.arrivalPort) {
+        const charged = applyPortCharges(
+          {
+            portOfDest: loc.arrivalPort,
+            ciValue: po.ciValue,
+            freight: po.freight,
+            inland: po.inland,
+            dpAmount: po.dpAmount,
+          },
+          true,
+        );
+        payload.stockingLocation = loc.name;
+        payload.portOfDest = loc.arrivalPort;
+        payload.freight = charged.freight ?? "";
+        payload.inland = charged.inland ?? "";
+        payload.balanceDue = charged.balanceDue ?? "";
+      } else if (loc) {
+        payload.stockingLocation = loc.name;
+        if (loc.arrivalPort) payload.portOfDest = loc.arrivalPort;
+      }
       if (updateStatus) {
         const merged = { ...(po as unknown as Record<string, unknown>), ...fields };
         payload.status = deriveStatusFromFields(merged, company);
@@ -231,9 +281,16 @@ export default function StageMilestoneEditor({
                     onChange={(e) => setField(f.k, e.target.value)}
                   >
                     <option value="">—</option>
-                    {(stageId === "BL" && f.k === "shippingLine"
-                      ? shippingLines.map((l) => l.name)
-                      : f.options || []
+                    {f.k === "stockingLocation" &&
+                      fields.stockingLocation &&
+                      !matchStockingLocation(stockingLocations, fields.stockingLocation) && (
+                        <option value={fields.stockingLocation}>{fields.stockingLocation}</option>
+                      )}
+                    {(f.k === "stockingLocation"
+                      ? stockingLocations.map((l) => l.name)
+                      : stageId === "BL" && f.k === "shippingLine"
+                        ? shippingLines.map((l) => l.name)
+                        : f.options || []
                     ).map((o) => (
                       <option key={o} value={o}>
                         {o}

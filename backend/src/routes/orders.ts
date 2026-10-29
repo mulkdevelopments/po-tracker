@@ -822,6 +822,8 @@ const advanceFieldsSchema = poSchema.pick({
   totalM2: true,
   skids: true,
   poValue: true,
+  stockingLocation: true,
+  portOfDest: true,
 }).partial();
 
 type LineInput = z.infer<typeof lineSchema>;
