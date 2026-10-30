@@ -35,8 +35,20 @@ export function fmtDim(v: unknown): string {
   return n.toLocaleString("en-US", { maximumFractionDigits: 4, minimumFractionDigits: 0 });
 }
 
+/** Show a stored YYYY-MM-DD date as DD-MM-YYYY. Other text is left as entered. */
 export function fmtDate(v: unknown): string {
-  return v ? String(v) : "";
+  if (v == null || v === "") return "";
+  const s = String(v).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!iso) return s;
+  return `${iso[3]}-${iso[2]}-${iso[1]}`;
+}
+
+/** Chronological key for a displayed DD-MM-YYYY or stored YYYY-MM-DD value. */
+export function dateSortKey(value: string): string {
+  const dmy = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  return value;
 }
 
 export function daysBetween(a?: string | null, b?: string | null): number | "" {

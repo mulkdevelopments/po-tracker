@@ -114,6 +114,10 @@ model PurchaseOrder {
   productionBegin      String?
   productionComplete   String?
   dispatchFromFactory  String?
+  /// A generated date stays tentative until someone marks it correct
+  productionBeginConfirmed    Boolean @default(false)
+  productionCompleteConfirmed Boolean @default(false)
+  dispatchConfirmed           Boolean @default(false)
   piSent               String?
   /// Manual / drag-drop order within priority (lower = sooner)
   productionSequence   Int?

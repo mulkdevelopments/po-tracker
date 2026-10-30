@@ -88,7 +88,7 @@ export async function generateCiExcel(po: CiPo): Promise<Buffer> {
   const summary = [
     ["PO #", `${po.poNo}${po.rev ? ` rev ${po.rev}` : ""}`],
     ["CI #", po.ciNo ?? ""],
-    ["CI Date", po.ciDate ?? ""],
+    ["CI Date", po.ciDate ? po.ciDate.replace(/^(\d{4})-(\d{2})-(\d{2}).*$/, "$3-$2-$1") : ""],
     ["Stocking location", po.stockingLocation ?? ""],
     ["Port of destination", po.portOfDest ?? ""],
     ["Container #", po.containerNo ?? ""],

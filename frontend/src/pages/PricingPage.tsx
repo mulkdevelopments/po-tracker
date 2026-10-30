@@ -10,7 +10,7 @@ import type {
   PricingPreviewRow,
   ReferenceData,
 } from "../types";
-import { fmtDim, fmtPrice, todayISO } from "../utils";
+import { fmtDim, fmtPrice, fmtDate, todayISO } from "../utils";
 
 type CatalogVals = {
   partNo: string;
@@ -183,7 +183,7 @@ function PriceHistory({ history }: { history: HistoryLine[] }) {
           {history.map((h) => (
             <tr key={h.id} className="border-t border-slate-200/80 text-slate-700">
               <td className="py-1.5 pr-3 font-mono text-slate-600 whitespace-nowrap">
-                {h.effectiveFrom} → {h.effectiveTo || "open"}
+                {fmtDate(h.effectiveFrom)} → {h.effectiveTo ? fmtDate(h.effectiveTo) : "open"}
               </td>
               <td className="py-1.5 px-2 text-right tabular-nums whitespace-nowrap">{fmtPrice(h.pricePerSqft, 2)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums whitespace-nowrap">{fmtPrice(h.pricePerM2, 2)}</td>
@@ -539,7 +539,7 @@ export default function PricingPage() {
                 {pastLists.map((v: PriceListVersionSummary) => (
                   <option key={v.id} value={v.id}>
                     {v.label}
-                    {v.effectiveTo ? ` · ${v.effectiveFrom} → ${v.effectiveTo}` : ` · from ${v.effectiveFrom}`}
+                    {v.effectiveTo ? ` · ${fmtDate(v.effectiveFrom)} → ${fmtDate(v.effectiveTo)}` : ` · from ${fmtDate(v.effectiveFrom)}`}
                     {v._count ? ` · ${v._count.prices}` : ""}
                   </option>
                 ))}

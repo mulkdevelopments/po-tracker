@@ -1,4 +1,4 @@
-/** Autocalculate planned production dates from priority, sequence, material date, and capacity. */
+/** Autocalculate planned production dates from row order, material date, and capacity. */
 
 export type CapacityConfig = {
   lines: number;
@@ -29,6 +29,9 @@ export type SchedulePo = {
   productionComplete?: string | null;
   productionStart?: string | null;
   productionEtc?: string | null;
+  productionBeginConfirmed?: boolean | null;
+  productionCompleteConfirmed?: boolean | null;
+  dispatchConfirmed?: boolean | null;
   soNo?: string | null;
   dispatchFromFactory?: string | null;
   poDate?: string | null;
@@ -44,10 +47,16 @@ export type ScheduleUpdate = {
   id: number;
   productionBegin: string;
   productionComplete: string;
+  dispatchFromFactory: string;
   productionStart: string;
   productionEtc: string;
   planningDate: string;
+  writeBegin: boolean;
+  writeComplete: boolean;
+  writeDispatch: boolean;
 };
+
+export type ScheduleMode = "fill" | "replan";
 
 const TERMINAL_PROD = new Set(["PRODUCTION COMPLETE", "SHIPPED"]);
 const TERMINAL_STATUS = new Set(["Arrived", "Telex / Seaway Release", "Closed", "Cancelled"]);
@@ -113,9 +122,6 @@ function maxISO(a: string, b: string): string {
 }
 
 export function compareProductionOrder(a: SchedulePo, b: SchedulePo): number {
-  const pa = (a.priority || "Standard") === "High" ? 0 : 1;
-  const pb = (b.priority || "Standard") === "High" ? 0 : 1;
-  if (pa !== pb) return pa - pb;
   const sa = a.productionSequence ?? 999999;
   const sb = b.productionSequence ?? 999999;
   if (sa !== sb) return sa - sb;
@@ -141,7 +147,7 @@ export function isOnProductionBoard(p: SchedulePo): boolean {
 /**
  * Number the production board 10, 20, 30… in the order it is displayed.
  *
- * Because `compareProductionOrder` reads the existing sequence as its second key, running
+ * Because `compareProductionOrder` reads the existing sequence first, running
  * this again keeps the order the operator sees and only re-spaces the numbers.
  * Returns just the orders whose number changes.
  */
@@ -167,15 +173,28 @@ export function isInSchedulePool(p: SchedulePo): boolean {
   return true;
 }
 
+function blankDate(value: string | null | undefined): boolean {
+  return !parseISODate(value);
+}
+
+function dateIsLocked(mode: ScheduleMode, confirmed: boolean | null | undefined, value: string | null | undefined): boolean {
+  if (blankDate(value)) return false;
+  if (mode === "fill") return true;
+  return !!confirmed;
+}
+
 /**
- * Assign production begin/complete (and sync workflow start/ETC) walking a shared capacity calendar.
+ * Assign production begin, then completion two days after that start and dispatch
+ * three days after completion. Fill mode only proposes dates that are still empty.
+ * Replan keeps a start date that has been marked correct and rebuilds the other two from it.
  */
 export function recalculateProductionDates(
   pos: SchedulePo[],
-  periods: CapacityPeriodLike[],
-  fallback: CapacityConfig,
+  _periods: CapacityPeriodLike[],
+  _fallback: CapacityConfig,
   todayISO: string,
   leadTimes: LeadTimes = DEFAULT_LEAD_TIMES,
+  mode: ScheduleMode = "replan",
 ): ScheduleUpdate[] {
   const today = parseISODate(todayISO) ?? new Date().toISOString().slice(0, 10);
   const pool = pos.filter(isInSchedulePool).sort(compareProductionOrder);
@@ -183,38 +202,91 @@ export function recalculateProductionDates(
   let cursor = today;
 
   for (const po of pool) {
-    // Material field may be a date ("2026-01-15") or a flag ("Yes" / "OLD STOCK")
+    const beginLocked = dateIsLocked(mode, po.productionBeginConfirmed, po.productionBegin);
+    const completeLocked = mode === "fill" && !blankDate(po.productionComplete);
+    const dispatchLocked = mode === "fill" && !blankDate(po.dispatchFromFactory);
     const material = parseISODate(po.allMaterialAvailable) ?? today;
-    let start = nextWorkingDay(maxISO(cursor, material));
-    const m2 = Math.max(0, Number(po.totalM2) || 0);
-    const cfg = capacityConfigForDate(periods, start, fallback);
-    const daily = Math.max(1, cfg.lines * cfg.m2PerLinePerDay);
-    let remaining = m2 > 0 ? m2 : daily; // at least one day if no m2
-    let day = start;
-    let lastWorked = start;
-    let guard = 0;
+    const start = beginLocked
+      ? parseISODate(po.productionBegin)!
+      : nextWorkingDay(maxISO(cursor, material));
+    const lastWorked = completeLocked ? parseISODate(po.productionComplete)! : addDaysISO(start, 2);
+    const dispatch = dispatchLocked ? parseISODate(po.dispatchFromFactory)! : addDaysISO(lastWorked, 3);
+    const writeBegin = !beginLocked && parseISODate(po.productionBegin) !== start;
+    const writeComplete = !completeLocked && parseISODate(po.productionComplete) !== lastWorked;
+    const writeDispatch = !dispatchLocked && parseISODate(po.dispatchFromFactory) !== dispatch;
 
-    while (remaining > 0 && guard++ < 10000) {
-      day = nextWorkingDay(day);
-      remaining -= daily;
-      lastWorked = day;
-      if (remaining > 0) day = addDaysISO(day, 1);
+    if (writeBegin || writeComplete || writeDispatch) {
+      updates.push({
+        id: po.id,
+        productionBegin: start,
+        productionComplete: lastWorked,
+        dispatchFromFactory: dispatch,
+        productionStart: start,
+        productionEtc: lastWorked,
+        planningDate: derivedPlanningDate({ ...po, productionStart: start }, leadTimes) ?? start,
+        writeBegin,
+        writeComplete,
+        writeDispatch,
+      });
     }
 
-    updates.push({
-      id: po.id,
-      productionBegin: start,
-      productionComplete: lastWorked,
-      productionStart: start,
-      productionEtc: lastWorked,
-      planningDate: derivedPlanningDate({ ...po, productionStart: start }, leadTimes) ?? start,
-    });
-
-    // Next PO starts the working day after this one finishes (sequential factory)
-    cursor = addDaysISO(lastWorked, 1);
+    const next = addDaysISO(lastWorked, 1);
+    if (next > cursor) cursor = next;
   }
 
   return updates;
+}
+
+const MANUAL_PROD_STATUS = new Set(["ON HOLD", "CONTAINER BOOKED"]);
+const BLOCKED_ORDER_STATUS = new Set(["PI Rejected", "CI Rejected", "PO Revised", "PO Cancelled", "Cancelled", "Closed"]);
+const PROD_STATUS_RANK: Record<string, number> = {
+  "UNDER PRODUCTION": 1,
+  "PRODUCTION COMPLETE": 2,
+  SHIPPED: 3,
+};
+
+export type ProductionProgress = {
+  productionStatus?: string;
+  status?: string;
+};
+
+/**
+ * Move production status, and the order-summary status, forward once a correct
+ * date has been reached. Tentative dates and future dates do not move status.
+ * On hold / container booked, and rejected or cancelled orders, are left as they are.
+ */
+export function productionProgressUpdate(
+  po: SchedulePo,
+  todayISO: string,
+  stageIndex: (status: string) => number,
+): ProductionProgress | null {
+  if (BLOCKED_ORDER_STATUS.has(po.status || "")) return null;
+  if (MANUAL_PROD_STATUS.has(po.productionStatus || "")) return null;
+  const today = parseISODate(todayISO) ?? todayISO.slice(0, 10);
+  const reached = (date: string | null | undefined, confirmed: boolean | null | undefined) => {
+    const d = parseISODate(date);
+    return !!confirmed && !!d && d <= today;
+  };
+
+  let targetProd: string | null = null;
+  let targetStatus: string | null = null;
+  if (reached(po.dispatchFromFactory, po.dispatchConfirmed)) {
+    targetProd = "SHIPPED";
+    targetStatus = "Shipped from Factory";
+  } else if (reached(po.productionComplete, po.productionCompleteConfirmed)) {
+    targetProd = "PRODUCTION COMPLETE";
+    targetStatus = "Production Complete";
+  } else if (reached(po.productionBegin, po.productionBeginConfirmed)) {
+    targetProd = "UNDER PRODUCTION";
+    targetStatus = "In Production";
+  }
+  if (!targetProd || !targetStatus) return null;
+
+  const data: ProductionProgress = {};
+  const curProd = PROD_STATUS_RANK[po.productionStatus || ""] ?? 0;
+  if (PROD_STATUS_RANK[targetProd] > curProd) data.productionStatus = targetProd;
+  if (stageIndex(targetStatus) > stageIndex(po.status || "")) data.status = targetStatus;
+  return data.productionStatus || data.status ? data : null;
 }
 
 export function plannedProductionStart(p: {

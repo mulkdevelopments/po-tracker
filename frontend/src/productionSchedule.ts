@@ -34,9 +34,6 @@ function parseISODate(raw: string | null | undefined, fallback?: string): string
 }
 
 export function compareProductionOrder(a: SchedulePo, b: SchedulePo): number {
-  const pa = (a.priority || "Standard") === "High" ? 0 : 1;
-  const pb = (b.priority || "Standard") === "High" ? 0 : 1;
-  if (pa !== pb) return pa - pb;
   const sa = a.productionSequence ?? 999999;
   const sb = b.productionSequence ?? 999999;
   if (sa !== sb) return sa - sb;
@@ -77,6 +74,11 @@ export function plannedProductionStart(p: {
 export type LeadTimes = { standard: number; nonStandard: number };
 
 export const DEFAULT_LEAD_TIMES: LeadTimes = { standard: 45, nonStandard: 90 };
+
+/** "No" / "N" means the order contains non-standard colours. */
+export function hasNonStandardColors(standardColorsOnly: string | null | undefined): boolean {
+  return !usesStandardLeadTime(standardColorsOnly);
+}
 
 /** "No" / "N" means the order contains non-standard colours and uses the longer lead time. */
 function usesStandardLeadTime(standardColorsOnly: string | null | undefined): boolean {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
@@ -28,8 +28,9 @@ import { canMarkPiEmailRole } from "../piEmail";
 import ResubmitTag from "../components/ResubmitTag";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, MasterData } from "../types";
-import { fmtMoney, fmtNum, fmtDate } from "../utils";
+import { fmtMoney, fmtNum, fmtDate, dateSortKey } from "../utils";
 import { ListFilter, X } from "lucide-react";
+import { FilterPopover, type ColFilter } from "../components/ColumnFilter";
 import {
   balancePaymentFlag,
   downpaymentFlag,
@@ -48,6 +49,9 @@ interface Col {
 }
 
 // Exact column order from the "Order Summary" sheet of the Order Tracker workbook.
+/** Stay visible while the order table scrolls sideways, through Order Status. */
+const FROZEN_KEYS = ["siNo", "poNo", "rev", "status"];
+
 const COLUMNS: Col[] = [
   { key: "siNo", label: "SI No.", type: "int", group: "PO Received" },
   { key: "poNo", label: "PO #", type: "text", group: "PO Received" },
@@ -110,11 +114,6 @@ function displayValue(col: Col, raw: unknown): string {
   }
 }
 
-interface ColFilter {
-  search: string;
-  selected: string[];
-}
-
 /** Worst payment variance for a row — under beats over so underpayments stay red. */
 function paymentRowAlert(
   p: PurchaseOrder,
@@ -162,6 +161,8 @@ export default function OrdersPage() {
   const [openCol, setOpenCol] = useState<string | null>(null);
   const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
   const filterOpenerRef = useRef<HTMLButtonElement | null>(null);
+  const gridRef = useRef<HTMLTableElement>(null);
+  const pointerDown = useRef<{ x: number; y: number } | null>(null);
   const [stockingEmailFilterActive, setStockingEmailFilterActive] = useState(false);
   const [piDueFilterActive, setPiDueFilterActive] = useState(false);
 
@@ -276,6 +277,7 @@ export default function OrdersPage() {
       arr.sort((a, b) => {
         if (a === "") return 1;
         if (b === "") return -1;
+        if (col.type === "date") return dateSortKey(a).localeCompare(dateSortKey(b));
         if (NUMERIC_TYPES.includes(col.type)) {
           const na = Number(String(a).replace(/[^0-9.-]/g, ""));
           const nb = Number(String(b).replace(/[^0-9.-]/g, ""));
@@ -334,6 +336,23 @@ export default function OrdersPage() {
       requestAnimationFrame(() => el?.focus());
     }
   };
+
+  useLayoutEffect(() => {
+    const table = gridRef.current;
+    if (!table) return;
+    const measure = () => {
+      const cells = table.querySelectorAll<HTMLElement>("thead th.freeze");
+      let left = 0;
+      cells.forEach((cell, i) => {
+        table.style.setProperty(`--freeze-${i}`, `${left}px`);
+        left += cell.offsetWidth;
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(table);
+    return () => observer.disconnect();
+  }, [rows.length, loading]);
 
   const setColFilter = (key: string, patch: Partial<ColFilter>) => {
     setFilters((prev) => {
@@ -547,14 +566,36 @@ export default function OrdersPage() {
             </Link>
           )}
         </div>
-        <div className="overflow-auto max-h-[calc(100dvh-220px)]">
-          <table className="excel-grid">
+        <div
+          className="overflow-auto max-h-[calc(100dvh-220px)]"
+          onScroll={() => {
+            if (openCol) closeFilter(false);
+          }}
+          onPointerDown={(e) => {
+            pointerDown.current = { x: e.clientX, y: e.clientY };
+          }}
+          onClickCapture={(e) => {
+            const start = pointerDown.current;
+            pointerDown.current = null;
+            if (!start) return;
+            if (Math.abs(e.clientX - start.x) > 5 || Math.abs(e.clientY - start.y) > 5) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+        >
+          <table className="excel-grid" ref={gridRef}>
             <thead>
               <tr>
                 {COLUMNS.map((col) => {
                   const active = !!filters[col.key as string];
+                  const freezeAt = FROZEN_KEYS.indexOf(col.key as string);
+                  const freezeClass =
+                    freezeAt < 0
+                      ? ""
+                      : `freeze freeze-${freezeAt}${freezeAt === FROZEN_KEYS.length - 1 ? " freeze-last" : ""}`;
                   return (
-                    <th key={col.key as string} className={active ? "col-filtered" : ""}>
+                    <th key={col.key as string} className={`${freezeClass}${active ? " col-filtered" : ""}`}>
                       <div className="th-inner">
                         <span className="th-label" title={col.label}>{col.label}</span>
                         <button
@@ -563,13 +604,13 @@ export default function OrdersPage() {
                           aria-label={`Filter ${col.label}`}
                           aria-haspopup="dialog"
                           aria-expanded={openCol === (col.key as string)}
-                          aria-keyshortcuts="Alt+ArrowDown"
+                          aria-keyshortcuts="Alt+ArrowDown Meta+ArrowDown"
                           onClick={(e) => {
                             e.stopPropagation();
                             openFilter(e.currentTarget, col.key as string);
                           }}
                           onKeyDown={(e) => {
-                            if (e.altKey && e.key === "ArrowDown") {
+                            if ((e.altKey || e.metaKey) && e.key === "ArrowDown") {
                               e.preventDefault();
                               e.stopPropagation();
                               if (openCol !== (col.key as string)) {
@@ -584,7 +625,7 @@ export default function OrdersPage() {
                     </th>
                   );
                 })}
-                <th className="actions-col"></th>
+                {canEdit() && <th className="actions-col"></th>}
               </tr>
             </thead>
             <tbody>
@@ -595,13 +636,13 @@ export default function OrdersPage() {
                     ? "pay-under"
                     : "pay-over"
                   : isManager && p.status === PI_PENDING_STATUS
-                    ? "bg-amber-50/80 hover:bg-amber-100/80"
+                    ? "row-pending-pi"
                     : isFinance && p.status === CI_PENDING_STATUS
-                      ? "bg-cyan-50/80 hover:bg-cyan-100/80"
+                      ? "row-pending-ci"
                       : isMaintainer && p.status === PI_REJECTED_STATUS
-                        ? "bg-red-50/80 hover:bg-red-100/80"
+                        ? "row-rejected"
                         : isMaintainer && p.status === CI_REJECTED_STATUS
-                          ? "bg-red-50/80 hover:bg-red-100/80"
+                          ? "row-rejected"
                           : "";
                 return (
                   <tr
@@ -610,17 +651,24 @@ export default function OrdersPage() {
                     title={payAlert?.title}
                     onClick={() => setSelected(p)}
                   >
-                    {COLUMNS.map((col) => (
+                    {COLUMNS.map((col) => {
+                      const freezeAt = FROZEN_KEYS.indexOf(col.key as string);
+                      const freezeClass =
+                        freezeAt < 0
+                          ? ""
+                          : `freeze freeze-${freezeAt}${freezeAt === FROZEN_KEYS.length - 1 ? " freeze-last" : ""}`;
+                      return (
                       <td
                         key={col.key as string}
-                        className={NUMERIC_TYPES.includes(col.type) ? "text-right tabular-nums" : ""}
+                        className={`${freezeClass}${NUMERIC_TYPES.includes(col.type) ? " text-right tabular-nums" : ""}`}
                       >
                         {renderCell(p, col)}
                       </td>
-                    ))}
-                    <td className="actions-col">
-                      <div className="flex items-center justify-end gap-2">
-                        {canEdit() && (
+                      );
+                    })}
+                    {canEdit() && (
+                      <td className="actions-col">
+                        <div className="flex items-center justify-end">
                           <button
                             type="button"
                             title="Delete order"
@@ -630,16 +678,15 @@ export default function OrdersPage() {
                           >
                             <X size={15} />
                           </button>
-                        )}
-                        <span className="text-indigo-600 text-xs whitespace-nowrap">Open ›</span>
-                      </div>
-                    </td>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={COLUMNS.length + 1} className="text-center text-slate-400 py-8">
+                  <td colSpan={COLUMNS.length + (canEdit() ? 1 : 0)} className="text-center text-slate-400 py-8">
                     No orders match the current filters.
                   </td>
                 </tr>
@@ -651,7 +698,7 @@ export default function OrdersPage() {
 
       {openCol && popPos && (
         <FilterPopover
-          col={COLUMNS.find((c) => (c.key as string) === openCol)!}
+          label={COLUMNS.find((c) => (c.key as string) === openCol)!.label}
           values={distinctByCol[openCol] ?? []}
           filter={filters[openCol] ?? { search: "", selected: [] }}
           pos={popPos}
@@ -683,195 +730,5 @@ export default function OrdersPage() {
         />
       )}
     </>
-  );
-}
-
-function FilterPopover({
-  col,
-  values,
-  filter,
-  pos,
-  onSearch,
-  onToggle,
-  onSelectAll,
-  onClear,
-  onClose,
-  onEscape,
-}: {
-  col: Col;
-  values: string[];
-  filter: ColFilter;
-  pos: { top: number; left: number };
-  onSearch: (s: string) => void;
-  onToggle: (v: string) => void;
-  onSelectAll: () => void;
-  onClear: () => void;
-  onClose: () => void;
-  onEscape: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<Array<HTMLInputElement | null>>([]);
-  const [valSearch, setValSearch] = useState("");
-  const [active, setActive] = useState(-1);
-  const onToggleRef = useRef(onToggle);
-  const onEscapeRef = useRef(onEscape);
-  onToggleRef.current = onToggle;
-  onEscapeRef.current = onEscape;
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-
-  const shown = values.filter((v) =>
-    valSearch ? (v || "(blank)").toLowerCase().includes(valSearch.toLowerCase()) : true,
-  );
-  const shownRef = useRef(shown);
-  const activeRef = useRef(active);
-  shownRef.current = shown;
-  activeRef.current = active;
-
-  useEffect(() => {
-    activeRef.current = -1;
-    setActive(-1);
-  }, [valSearch]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const pop = ref.current;
-      if (!pop) return;
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onEscapeRef.current();
-        return;
-      }
-      const target = e.target as HTMLElement | null;
-      const typing =
-        !!target &&
-        pop.contains(target) &&
-        target.tagName === "INPUT" &&
-        (target as HTMLInputElement).type !== "checkbox";
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        const opener = document.querySelector<HTMLElement>(".th-filter[aria-expanded='true']");
-        const focusInside =
-          pop.contains(document.activeElement) || document.activeElement === opener;
-        if (!focusInside) return;
-        const list = shownRef.current;
-        if (!list.length) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const cur = activeRef.current;
-        const next =
-          e.key === "ArrowDown"
-            ? cur < 0
-              ? 0
-              : Math.min(list.length - 1, cur + 1)
-            : cur < 0
-              ? list.length - 1
-              : Math.max(0, cur - 1);
-        activeRef.current = next;
-        setActive(next);
-        const el = itemRefs.current[next];
-        el?.focus();
-        el?.scrollIntoView({ block: "nearest" });
-        return;
-      }
-      if (e.key === " " && !typing && activeRef.current >= 0 && target?.closest(".filter-pop-item")) {
-        const list = shownRef.current;
-        const value = list[activeRef.current];
-        if (value === undefined) return;
-        e.preventDefault();
-        e.stopPropagation();
-        onToggleRef.current(value);
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (e.key === " " && target?.closest(".filter-pop-item")) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    document.addEventListener("keyup", onKeyUp, true);
-    return () => {
-      document.removeEventListener("keydown", onKey, true);
-      document.removeEventListener("keyup", onKeyUp, true);
-    };
-  }, []);
-
-  return (
-    <div
-      ref={ref}
-      className="filter-pop"
-      style={{ top: pos.top, left: pos.left }}
-      role="dialog"
-      aria-label={`Filter ${col.label}`}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="text-xs font-semibold text-slate-700 mb-2 truncate">{col.label}</div>
-      <input
-        autoFocus
-        placeholder="Contains…"
-        value={filter.search}
-        onChange={(e) => onSearch(e.target.value)}
-        className="w-full border border-slate-300 rounded-md px-2 py-1 text-xs mb-2"
-      />
-      <input
-        placeholder="Find values…"
-        value={valSearch}
-        onChange={(e) => setValSearch(e.target.value)}
-        className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs mb-1.5"
-      />
-      <div className="flex items-center justify-between text-[11px] text-indigo-600 mb-1">
-        <button type="button" onClick={onSelectAll} className="hover:underline">
-          Select all
-        </button>
-        <button type="button" onClick={onClear} className="hover:underline">
-          Clear
-        </button>
-      </div>
-      <div className="max-h-52 overflow-auto border border-slate-100 rounded-md" role="listbox" aria-multiselectable="true">
-        {shown.map((v, i) => {
-          const checked = filter.selected.length === 0 || filter.selected.includes(v);
-          return (
-            <label
-              key={v || "(blank)"}
-              className={`filter-pop-item flex items-center gap-2 px-2 py-1 text-xs hover:bg-slate-50 cursor-pointer ${active === i ? "is-active" : ""}`}
-              role="option"
-              aria-selected={filter.selected.includes(v)}
-            >
-              <input
-                ref={(el) => {
-                  itemRefs.current[i] = el;
-                }}
-                type="checkbox"
-                checked={filter.selected.includes(v)}
-                onChange={() => onToggle(v)}
-                onFocus={() => {
-                  activeRef.current = i;
-                  setActive(i);
-                }}
-              />
-              <span className={`truncate ${!checked ? "text-slate-400" : ""}`}>{v || "(blank)"}</span>
-            </label>
-          );
-        })}
-        {shown.length === 0 && <div className="px-2 py-2 text-xs text-slate-400">No values</div>}
-      </div>
-      <div className="flex justify-end mt-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-xs px-3 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700"
-        >
-          Done
-        </button>
-      </div>
-    </div>
   );
 }

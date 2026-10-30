@@ -15,7 +15,6 @@ import {
   canMarkStockingEmailSent,
   isAtOrAfterCiSentForPo,
 } from "../constants.js";
-import { getAllowedAdvanceStages, deriveStatusFromFields } from "../workflows.js";
 import { parseCompany } from "../companies.js";
 import { nextCiNo, nextPiNo } from "../docNumbers.js";
 import { generatePiPdf } from "../piPdf.js";
@@ -27,9 +26,12 @@ import {
   DEFAULT_LEAD_TIMES,
   derivedPlanningDate,
   numberProductionSequence,
+  productionProgressUpdate,
   recalculateProductionDates,
   type CapacityConfig,
+  type ScheduleMode,
 } from "../productionSchedule.js";
+import { getAllowedAdvanceStages, deriveStatusFromFields, workflowStageIndex } from "../workflows.js";
 
 const router = Router();
 
@@ -190,6 +192,9 @@ const poSchema = z.object({
   productionBegin: strField,
   productionComplete: strField,
   dispatchFromFactory: strField,
+  productionBeginConfirmed: z.boolean().optional(),
+  productionCompleteConfirmed: z.boolean().optional(),
+  dispatchConfirmed: z.boolean().optional(),
   piSent: strField,
   productionSequence: intField,
   productionStatus: strField,
@@ -272,6 +277,31 @@ function poUpdateData(poData: Record<string, unknown>): Prisma.PurchaseOrderUpda
   return poData as Prisma.PurchaseOrderUpdateInput;
 }
 
+const PRODUCTION_DATE_FLAGS = [
+  ["productionBegin", "productionBeginConfirmed"],
+  ["productionComplete", "productionCompleteConfirmed"],
+  ["dispatchFromFactory", "dispatchConfirmed"],
+] as const;
+
+/** Typing a production date marks that date correct. Clearing it returns it to tentative. */
+function lockEditedProductionDates(
+  existing: { productionBegin?: string | null; productionComplete?: string | null; dispatchFromFactory?: string | null },
+  data: Record<string, unknown>,
+) {
+  for (const [field, flag] of PRODUCTION_DATE_FLAGS) {
+    if (data[flag] !== undefined) continue;
+    if (data[field] === undefined) continue;
+    const next = data[field] == null ? "" : String(data[field]);
+    const prev = existing[field] == null ? "" : String(existing[field]);
+    if (next !== prev) data[flag] = next.trim() !== "";
+  }
+  if (data.productionComplete !== undefined && data.productionEtc === undefined) {
+    const next = data.productionComplete == null ? "" : String(data.productionComplete).trim();
+    const prev = existing.productionComplete == null ? "" : String(existing.productionComplete).trim();
+    if (next && next !== prev) data.productionEtc = next;
+  }
+}
+
 router.get("/", requireAuth, requirePage("orders"), async (req, res) => {
   const company = getCompany(req);
   const pos = await prisma.purchaseOrder.findMany({
@@ -319,6 +349,7 @@ router.get("/next-doc-no", requireAuth, requirePage("orders"), async (req, res) 
 
 const reorderSchema = z.object({
   orderedIds: z.array(z.number().int()).min(1),
+  urgentIds: z.array(z.number().int()).optional(),
 });
 
 /** Renumber productionSequence (10, 20, 30…) from drag-and-drop order */
@@ -327,6 +358,7 @@ router.post("/reorder-production", requireAuth, requirePage("production"), requi
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const company = getCompany(req);
   const ids = parsed.data.orderedIds;
+  const urgent = new Set(parsed.data.urgentIds ?? []);
   const found = await prisma.purchaseOrder.findMany({
     where: { company, id: { in: ids } },
     select: { id: true },
@@ -338,7 +370,10 @@ router.post("/reorder-production", requireAuth, requirePage("production"), requi
     ids.map((id, idx) =>
       prisma.purchaseOrder.update({
         where: { id },
-        data: { productionSequence: (idx + 1) * 10 },
+        data: {
+          productionSequence: (idx + 1) * 10,
+          ...(parsed.data.urgentIds ? { priority: urgent.has(id) ? "High" : "Standard" } : {}),
+        },
       }),
     ),
   );
@@ -350,9 +385,14 @@ router.post("/reorder-production", requireAuth, requirePage("production"), requi
   res.json({ pos: ids.map((id) => byId.get(id)!).filter(Boolean) });
 });
 
-/** Recalculate production begin/complete from priority, sequence, material date, capacity */
+const scheduleModeSchema = z.object({
+  mode: z.enum(["fill", "replan"]).optional(),
+});
+
+/** Fill empty production dates, or replan tentative ones. Correct dates are kept. */
 router.post("/recalculate-production", requireAuth, requirePage("production"), requirePoEdit, async (req, res) => {
   const company = getCompany(req);
+  const mode: ScheduleMode = scheduleModeSchema.safeParse(req.body).data?.mode ?? "replan";
   try {
     const [pos, periods, config, settings] = await Promise.all([
       prisma.purchaseOrder.findMany({ where: { company }, include: poInclude }),
@@ -371,53 +411,101 @@ router.post("/recalculate-production", requireAuth, requirePage("production"), r
       standard: Number(config?.leadTimeStandard) || DEFAULT_LEAD_TIMES.standard,
       nonStandard: Number(config?.leadTimeNonStandard) || DEFAULT_LEAD_TIMES.nonStandard,
     };
-    const updates = recalculateProductionDates(pos, periods, fallback, todayISO(), leadTimes);
-    if (updates.length) {
+    const today = todayISO();
+    const planned = recalculateProductionDates(pos, periods, fallback, today, leadTimes, mode);
+    const datePatch = new Map<number, Record<string, unknown>>();
+    for (const u of planned) {
+      const data: Record<string, unknown> = {};
+      if (u.writeBegin) {
+        data.productionBegin = u.productionBegin;
+        data.productionStart = u.productionStart;
+        data.planningDate = u.planningDate;
+        data.productionBeginConfirmed = false;
+      }
+      if (u.writeComplete) {
+        data.productionComplete = u.productionComplete;
+        data.productionEtc = u.productionEtc;
+        data.productionCompleteConfirmed = false;
+      }
+      if (u.writeDispatch) {
+        data.dispatchFromFactory = u.dispatchFromFactory;
+        data.dispatchConfirmed = false;
+      }
+      if (Object.keys(data).length) datePatch.set(u.id, data);
+    }
+
+    const writes: { id: number; data: Record<string, unknown>; note: string }[] = [];
+    for (const po of pos) {
+      const data = { ...(datePatch.get(po.id) ?? {}) };
+      const completeDate = String(data.productionComplete ?? po.productionComplete ?? "").trim();
+      const etcDate = String(data.productionEtc ?? po.productionEtc ?? "").trim();
+      if (completeDate && !etcDate) data.productionEtc = completeDate;
+      const progress = productionProgressUpdate(
+        { ...po, ...data },
+        today,
+        (status) => workflowStageIndex(company, status),
+      );
+      if (progress?.status) data.status = progress.status;
+      if (progress?.productionStatus) data.productionStatus = progress.productionStatus;
+      if (!Object.keys(data).length) continue;
+      const bits: string[] = [];
+      if (data.productionBegin) bits.push(`begin ${data.productionBegin}`);
+      if (data.productionComplete) bits.push(`complete ${data.productionComplete}`);
+      if (data.productionEtc && data.productionEtc !== po.productionEtc) bits.push(`ETC ${data.productionEtc}`);
+      if (data.dispatchFromFactory) bits.push(`dispatch ${data.dispatchFromFactory}`);
+      if (data.status) bits.push(`status ${data.status}`);
+      writes.push({
+        id: po.id,
+        data,
+        note: bits.length ? bits.join(", ") : "Production status updated",
+      });
+    }
+
+    if (writes.length) {
       await prisma.$transaction(
-        updates.flatMap((u) => [
+        writes.flatMap((w) => [
           prisma.purchaseOrder.update({
-            where: { id: u.id },
-            data: {
-              productionBegin: u.productionBegin,
-              productionComplete: u.productionComplete,
-              productionStart: u.productionStart,
-              productionEtc: u.productionEtc,
-              planningDate: u.planningDate,
-            },
+            where: { id: w.id },
+            data: w.data as Prisma.PurchaseOrderUpdateInput,
           }),
           prisma.poHistory.create({
             data: {
-              poId: u.id,
+              poId: w.id,
               stage: "Production schedule",
-              note: `Auto dates ${u.productionBegin} → ${u.productionComplete}`,
+              note: w.note,
               userId: req.user!.id,
               byRole: req.user!.role,
-              at: todayISO(),
+              at: today,
             },
           }),
         ]),
       );
     }
-    // Keep the board numbered. Ordering is unchanged — this only re-spaces Seq so every
-    // row carries a number, including ones the capacity walk did not touch.
-    const scheduled = await prisma.purchaseOrder.findMany({ where: { company } });
-    const numbering = numberProductionSequence(scheduled);
-    if (numbering.length) {
-      await prisma.$transaction(
-        numbering.map((u) =>
-          prisma.purchaseOrder.update({
-            where: { id: u.id },
-            data: { productionSequence: u.productionSequence },
-          }),
-        ),
-      );
+
+    let numberedCount = 0;
+    if (mode === "replan") {
+      const scheduled = await prisma.purchaseOrder.findMany({ where: { company } });
+      const numbering = numberProductionSequence(scheduled);
+      numberedCount = numbering.length;
+      if (numbering.length) {
+        await prisma.$transaction(
+          numbering.map((u) =>
+            prisma.purchaseOrder.update({
+              where: { id: u.id },
+              data: { productionSequence: u.productionSequence },
+            }),
+          ),
+        );
+      }
     }
+
     const refreshed = await prisma.purchaseOrder.findMany({
       where: { company },
       include: poInclude,
       orderBy: { id: "desc" },
     });
-    res.json({ pos: refreshed, updatedCount: updates.length, numberedCount: numbering.length });
+    const statusCount = writes.filter((w) => w.data.status || w.data.productionStatus).length;
+    res.json({ pos: refreshed, updatedCount: datePatch.size, numberedCount, statusCount });
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "Recalculate failed" });
   }
@@ -703,6 +791,18 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
     fillMissingPortCharges(poData, existing as unknown as Record<string, unknown>),
     existing as unknown as Record<string, unknown>,
   );
+  lockEditedProductionDates(existing, headerData);
+  if (parsed.data.status === undefined || parsed.data.productionStatus === undefined) {
+    const progress = productionProgressUpdate(
+      { ...existing, ...headerData },
+      todayISO(),
+      (status) => workflowStageIndex(company, status),
+    );
+    if (progress?.status && parsed.data.status === undefined) headerData.status = progress.status;
+    if (progress?.productionStatus && parsed.data.productionStatus === undefined) {
+      headerData.productionStatus = progress.productionStatus;
+    }
+  }
   await prisma.$transaction(async (tx) => {
     await tx.purchaseOrder.update({ where: { id }, data: poUpdateData(headerData) });
     if (lines) {

@@ -117,8 +117,6 @@ const SIGN_SIZE = 6.5;
 
 const LINE = rgb(0, 0, 0);
 const BLACK = rgb(0, 0, 0);
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 type Align = "left" | "center" | "right";
 
 function assetBytes(name: string): Uint8Array | null {
@@ -162,9 +160,9 @@ function safe(text: string): string {
 
 function fmtPiDate(iso?: string | null): string {
   if (!iso) return "";
-  const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
-  if (isNaN(d.getTime())) return iso;
-  return `${d.getDate()}-${MONTHS[d.getMonth()]}-${String(d.getFullYear()).slice(2)}`;
+  const m = iso.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return iso;
+  return `${m[3]}-${m[2]}-${m[1]}`;
 }
 
 function fmtNum(n: number): string {

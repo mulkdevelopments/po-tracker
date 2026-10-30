@@ -212,16 +212,16 @@ export const api = {
       body: JSON.stringify(to?.length ? { to } : {}),
     }),
 
-  reorderProduction: (orderedIds: number[]) =>
+  reorderProduction: (orderedIds: number[], urgentIds: number[]) =>
     request<{ pos: PurchaseOrder[] }>(`/orders/reorder-production${companyParam()}`, {
       method: "POST",
-      body: JSON.stringify({ orderedIds }),
+      body: JSON.stringify({ orderedIds, urgentIds }),
     }),
 
-  recalculateProduction: () =>
-    request<{ pos: PurchaseOrder[]; updatedCount: number; numberedCount: number }>(
+  recalculateProduction: (mode: "fill" | "replan" = "replan") =>
+    request<{ pos: PurchaseOrder[]; updatedCount: number; numberedCount: number; statusCount: number }>(
       `/orders/recalculate-production${companyParam()}`,
-      { method: "POST", body: JSON.stringify({}) },
+      { method: "POST", body: JSON.stringify({ mode }) },
     ),
 
   /**

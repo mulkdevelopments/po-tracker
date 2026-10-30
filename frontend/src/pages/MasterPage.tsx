@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import type { ReferenceData, PiDocumentSettings } from "../types";
-import { fmtNum, isValidEmail } from "../utils";
+import { fmtNum, fmtDate, isValidEmail } from "../utils";
 import { DEFAULT_PI_DOCUMENT, piDocumentFromMaster } from "../piDocument";
 
 type Row = { id: number; [k: string]: unknown };
@@ -284,8 +284,8 @@ function ProductionCapacityCard({ ref, canEdit, onSaved }: { ref: ReferenceData;
             {periods.map((p) => (
               <tr key={p.id}>
                 <td>{p.label || "—"}</td>
-                <td className="font-mono">{p.effectiveFrom}</td>
-                <td className="font-mono">{p.effectiveTo || "open"}</td>
+                <td className="font-mono">{fmtDate(p.effectiveFrom)}</td>
+                <td className="font-mono">{p.effectiveTo ? fmtDate(p.effectiveTo) : "open"}</td>
                 <td className="text-right">{p.productionLines}</td>
                 <td className="text-right">{p.m2PerLinePerDay}</td>
                 <td className="text-right">{p.m2PerContainer}</td>

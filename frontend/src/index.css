@@ -1088,12 +1088,60 @@ button.pipeline-checklist-item {
   background: #fef3c7;
 }
 
+.excel-grid .freeze {
+  position: sticky;
+  background: #fff;
+  z-index: 3;
+}
+
+.excel-grid th.freeze {
+  z-index: 5;
+  background: #f1f5f9;
+}
+
+.excel-grid th.freeze.col-filtered {
+  background: #eef2ff;
+}
+
+.excel-grid .freeze-0 { left: var(--freeze-0, 0px); }
+.excel-grid .freeze-1 { left: var(--freeze-1, 0px); }
+.excel-grid .freeze-2 { left: var(--freeze-2, 0px); }
+.excel-grid .freeze-3 { left: var(--freeze-3, 0px); }
+
+.excel-grid .freeze-last {
+  border-right: 2px solid #cbd5e1;
+}
+
+.excel-grid tbody tr.row-pending-pi > td {
+  background: #fffbeb;
+}
+.excel-grid tbody tr.row-pending-pi:hover > td {
+  background: #fef3c7;
+}
+.excel-grid tbody tr.row-pending-ci > td {
+  background: #ecfeff;
+}
+.excel-grid tbody tr.row-pending-ci:hover > td {
+  background: #cffafe;
+}
+.excel-grid tbody tr.row-rejected > td {
+  background: #fef2f2;
+}
+.excel-grid tbody tr.row-rejected:hover > td {
+  background: #fee2e2;
+}
+
 .excel-grid .actions-col {
   position: sticky;
   right: 0;
   background: #fff;
   border-left: 1px solid #e2e8f0;
-  z-index: 1;
+  z-index: 4;
+}
+
+.excel-grid th.actions-col {
+  z-index: 6;
+  background: #f1f5f9;
 }
 
 .excel-grid tbody tr:hover .actions-col {
@@ -1115,10 +1163,102 @@ button.pipeline-checklist-item {
   background: #eef2ff;
 }
 
-.excel-grid .th-filter:focus-visible {
+.excel-grid .th-filter:focus-visible,
+.tbl .th-filter:focus-visible {
   outline: 2px solid #d97706;
   outline-offset: 1px;
   color: #475569;
   background: #e2e8f0;
+}
+
+.tbl.prod-grid > thead > tr > th {
+  padding: 0;
+  text-transform: none;
+}
+
+.tbl .th-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  min-width: 88px;
+}
+
+.tbl .th-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tbl .th-filter {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.tbl .th-filter:hover {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.tbl .th-filter-active {
+  color: #4f46e5;
+  background: #e0e7ff;
+}
+
+.tbl > thead > tr > th.col-filtered {
+  background: #eef2ff;
+}
+
+.tbl > tbody > tr > td.date-tentative,
+.tbl > tbody > tr:hover > td.date-tentative,
+.tbl > tbody > tr.row-urgent > td.date-tentative,
+.tbl > tbody > tr.row-urgent:hover > td.date-tentative {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.tbl > tbody > tr.row-not-shipped > td {
+  background: #fef9c3;
+}
+
+.tbl > tbody > tr.row-not-shipped:hover > td {
+  background: #fef08a;
+}
+
+.tbl > tbody > tr.row-urgent > td {
+  background: #fff7ed;
+}
+
+.tbl > tbody > tr.row-urgent:hover > td {
+  background: #ffedd5;
+}
+
+.tbl > tbody > tr > td.date-correct,
+.tbl > tbody > tr:hover > td.date-correct,
+.tbl > tbody > tr.row-urgent > td.date-correct,
+.tbl > tbody > tr.row-urgent:hover > td.date-correct,
+.tbl > tbody > tr.row-not-shipped > td.date-correct,
+.tbl > tbody > tr.row-not-shipped:hover > td.date-correct {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.po-nonstandard {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #ffe4e6;
+  color: #9f1239;
+  font-weight: 700;
 }
 

@@ -177,6 +177,10 @@ export interface PurchaseOrder {
   productionBegin?: string | null;
   productionComplete?: string | null;
   dispatchFromFactory?: string | null;
+  /** False while the date is only a generated plan */
+  productionBeginConfirmed?: boolean | null;
+  productionCompleteConfirmed?: boolean | null;
+  dispatchConfirmed?: boolean | null;
   piSent?: string | null;
   productionSequence?: number | null;
   productionStatus?: string | null;

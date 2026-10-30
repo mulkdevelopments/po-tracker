@@ -3,7 +3,7 @@ import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, ReferenceData, AppConfigData } from "../types";
-import { fmtMoney, fmtNum } from "../utils";
+import { fmtMoney, fmtNum, fmtDate } from "../utils";
 import { computeDashboard, statusMix, totalRow, dashboardActiveYearOrders, orderStatusGroup, type VolumeRow, type DashboardScope } from "../reports";
 import type { Company } from "../companies";
 import { StatusDoughnut, AnnualSalesPanel, CapacityPanel, DashboardYearFilter } from "../components/DashboardCharts";
@@ -99,7 +99,7 @@ function StatusDetailModal({
                   <td className="font-mono font-semibold text-slate-900">{p.poNo}</td>
                   {scope === "BOTH" && <td>{p.company === "SYNERGY" ? "Cynergy" : "UFP"}</td>}
                   <td>{p.stockingLocation || "—"}</td>
-                  <td>{p.poDate || "—"}</td>
+                  <td>{fmtDate(p.poDate) || "—"}</td>
                   <td className="text-right">{fmtNum(p.totalM2, 0)}</td>
                   <td className="text-right">{fmtMoney(p.poValue)}</td>
                 </tr>

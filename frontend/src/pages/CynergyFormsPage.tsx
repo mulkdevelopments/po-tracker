@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { api, canEditPo, type CynergyFormSubmission } from "../api";
+import { fmtDate } from "../utils";
 import { useAuth } from "../AuthContext";
 import { useCompany } from "../CompanyContext";
 
@@ -284,7 +285,7 @@ export default function CynergyFormsPage() {
                     )}
                     <td className="px-3 py-2 text-slate-500">{s.id}</td>
                     <td className="px-3 py-2 font-medium text-slate-900">{s.poNo}</td>
-                    <td className="px-3 py-2">{s.poDate || "—"}</td>
+                    <td className="px-3 py-2">{fmtDate(s.poDate) || "—"}</td>
                     <td className="px-3 py-2">
                       <div>{s.submitterName || "—"}</div>
                       {s.submitterEmail && <div className="text-xs text-slate-400">{s.submitterEmail}</div>}
@@ -311,7 +312,7 @@ export default function CynergyFormsPage() {
                 </div>
                 {statusBadge(selected.status)}
               </div>
-              <p className="text-sm text-slate-600">{selected.poDate || "—"}</p>
+              <p className="text-sm text-slate-600">{fmtDate(selected.poDate) || "—"}</p>
               {selected.notes && <p className="text-sm text-slate-700">{selected.notes}</p>}
               {selected.rejectReason && (
                 <div className="rounded-md bg-rose-50 px-2 py-1.5 text-sm text-rose-800">

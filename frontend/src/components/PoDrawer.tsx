@@ -804,7 +804,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
 
                 <div className="px-5 pb-2">
                   <div className="po-drawer-summary-grid">
-                    <Field label="PO date" val={fmtDate(po.poDate)} />
+                    <Field label="PO date" val={po.poDate ? fmtDate(po.poDate) : null} />
                     <Field
                       label="Priority"
                       val={
@@ -979,7 +979,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
               <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Section title="Proforma invoice" stack>
                   <Field label="PI #" val={po.piNo} />
-                  <Field label="PI date" val={po.piDate} />
+                  <Field label="PI date" val={po.piDate ? fmtDate(po.piDate) : null} />
                   <Field label="PI value" val={fmtMoney(po.piValue)} />
                   <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
                   <Field label="PI sent" val={po.piSent ? fmtDate(po.piSent) : null} />
@@ -993,7 +993,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   title="Down payment"
                   tone={dpPayFlag && dpPayFlag.kind !== "ok" ? dpPayFlag.kind : null}
                 >
-                  <Field label="DP date" val={po.dpDate} />
+                  <Field label="DP date" val={po.dpDate ? fmtDate(po.dpDate) : null} />
                   <Field label="DP amount" val={fmtMoney(po.dpAmount)} />
                   {dpPayFlag && dpPayFlag.kind !== "ok" && (
                     <div className="col-span-2">
@@ -1006,11 +1006,11 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 </Section>
                 <Section title="Shipping & CI" wide>
                   <Field label="Container #" val={po.containerNo} />
-                  <Field label="ETD" val={po.actualDeparture} />
-                  <Field label="ETA" val={po.shippingEta} />
+                  <Field label="ETD" val={po.actualDeparture ? fmtDate(po.actualDeparture) : null} />
+                  <Field label="ETA" val={po.shippingEta ? fmtDate(po.shippingEta) : null} />
                   <Field label="ISF" val={po.isf} />
                   <Field label="CI #" val={po.ciNo} />
-                  <Field label="CI date" val={po.ciDate} />
+                  <Field label="CI date" val={po.ciDate ? fmtDate(po.ciDate) : null} />
                   <Field label="CI sent" val={po.revisionSent} />
                   <Field label="Freight" val={fmtMoney(po.freight)} />
                   <Field label="Inland" val={fmtMoney(po.inland)} />
@@ -1045,7 +1045,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   wide
                   tone={bpPayFlag && bpPayFlag.kind !== "ok" ? bpPayFlag.kind : null}
                 >
-                  <Field label="BP date" val={po.bpDate} />
+                  <Field label="BP date" val={po.bpDate ? fmtDate(po.bpDate) : null} />
                   <Field label="BP amount" val={fmtMoney(po.bpAmount)} />
                   {bpPayFlag && bpPayFlag.kind !== "ok" && (
                     <div className="col-span-2">
@@ -1068,7 +1068,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="Production ETC" val={po.productionEtc ? fmtDate(po.productionEtc) : null} />
                   <Field label="SO #" val={po.soNo} />
                   <Field label="Standard colors only" val={po.standardColorsOnly} />
-                  <Field label="All material available" val={po.allMaterialAvailable} />
+                  <Field label="All material available" val={po.allMaterialAvailable ? fmtDate(po.allMaterialAvailable) : null} />
                   <Field label="Production sequence" val={po.productionSequence} />
                   <Field label="Production begin" val={po.productionBegin ? fmtDate(po.productionBegin) : null} />
                   <Field label="Dispatch from factory" val={po.dispatchFromFactory ? fmtDate(po.dispatchFromFactory) : null} />
@@ -1087,7 +1087,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                         <div className="po-drawer-history-stage">{h.stage}</div>
                         {h.note ? <div className="po-drawer-history-note">{h.note}</div> : null}
                         <div className="po-drawer-history-meta">
-                          {h.at} · {h.user?.name || "—"}
+                          {fmtDate(h.at)} · {h.user?.name || "—"}
                         </div>
                       </li>
                     ))}
@@ -1211,7 +1211,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 </p>
               ) : (
                 <p className="text-sm font-medium text-emerald-700">
-                  Order complete{po.arrivalDate ? ` · Arrived ${po.arrivalDate}` : ""}
+                  Order complete{po.arrivalDate ? ` · Arrived ${fmtDate(po.arrivalDate)}` : ""}
                 </p>
               )}
             </div>
@@ -1618,7 +1618,7 @@ function AdvanceButton({
                 <span className="text-slate-500">PI #:</span> {po.piNo || "—"}
               </div>
               <div>
-                <span className="text-slate-500">PI Date:</span> {po.piDate || "—"}
+                <span className="text-slate-500">PI Date:</span> {fmtDate(po.piDate) || "—"}
               </div>
               <div>
                 <span className="text-slate-500">PI Value:</span> {po.piValue != null ? fmtMoney(po.piValue) : "—"}
@@ -1632,7 +1632,7 @@ function AdvanceButton({
                 <span className="text-slate-500">CI #:</span> {po.ciNo || "—"}
               </div>
               <div>
-                <span className="text-slate-500">CI Date:</span> {po.ciDate || "—"}
+                <span className="text-slate-500">CI Date:</span> {fmtDate(po.ciDate) || "—"}
               </div>
               <div>
                 <span className="text-slate-500">CI Value:</span> {po.ciValue != null ? fmtMoney(po.ciValue) : "—"}

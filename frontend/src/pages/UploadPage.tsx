@@ -13,7 +13,7 @@ import {
   saveUploadDraft,
 } from "../uploadDraft";
 import { extractSynergyPdfPages } from "../synergyPdf";
-import { fmtMoney, fmtNum, todayISO } from "../utils";
+import { fmtMoney, fmtNum, fmtDate, todayISO } from "../utils";
 import MoneyInput from "../components/MoneyInput";
 import { LINE_RECOMPUTE_KEYS, type LineForm as SharedLineForm } from "../lineMath";
 import {
@@ -869,7 +869,7 @@ export default function UploadPage() {
                         </td>
                         <td className="px-2 py-1.5 font-mono">{item.page}</td>
                         <td className="px-2 py-1.5 font-mono">{toStr(g.poNo) || "—"}</td>
-                        <td className="px-2 py-1.5">{toStr(g.poDate) || "—"}</td>
+                        <td className="px-2 py-1.5">{fmtDate(toStr(g.poDate)) || "—"}</td>
                         <td className="px-2 py-1.5 text-right">{lineCount}</td>
                         <td className="px-2 py-1.5 text-right">{matched}/{lineCount}</td>
                         <td className="px-2 py-1.5 text-right">{fmtNum(Number(g.totalM2) || 0, 0)}</td>
