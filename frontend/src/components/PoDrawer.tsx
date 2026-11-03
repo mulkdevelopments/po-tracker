@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, AuthUser, MasterData, PoLine, ReferenceData } from "../types";
 import { canAdvanceStage, canEditProductionActualsForPo, canEditPo, getAllowedAdvanceStages, api } from "../api";
-import { fmtMoney, fmtNum, fmtDate, todayISO, addWeeksISO } from "../utils";
+import { fmtMoney, fmtNum, fmtDate, fmtSizeMm, todayISO, addWeeksISO } from "../utils";
 import {
   deriveStatusFromFields,
   resolvePipelineStatus,
@@ -845,6 +845,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                           <th className="w-8">#</th>
                           <th>Part #</th>
                           <th>Size</th>
+                          <th>Size (mm)</th>
                           <th>Color</th>
                           {!sheetBasis && <th className="text-right">Qty MSF</th>}
                           <th className="text-right">Qty m²</th>
@@ -880,6 +881,12 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                               <td>{l.lineNo}</td>
                               <td className="font-mono truncate" title={l.partNo ?? undefined}>{l.partNo}</td>
                               <td className="truncate" title={l.size ?? undefined}>{l.size}</td>
+                              <td
+                                className="truncate tabular-nums"
+                                title={fmtSizeMm(l.widthMm, l.lengthMm) || undefined}
+                              >
+                                {fmtSizeMm(l.widthMm, l.lengthMm) || <span className="text-slate-300">—</span>}
+                              </td>
                               <td className="truncate" title={l.color ?? undefined}>{l.color}</td>
                               {!sheetBasis && <td className="text-right">{fmtNum(l.qtyMsf, 3)}</td>}
                               <td className="text-right">{fmtNum(l.qtyM2, 2)}</td>

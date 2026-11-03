@@ -35,6 +35,12 @@ export function fmtDim(v: unknown): string {
   return n.toLocaleString("en-US", { maximumFractionDigits: 4, minimumFractionDigits: 0 });
 }
 
+/** Same millimetre size string as the pricing catalog, e.g. "1245 × 2135 mm". */
+export function fmtSizeMm(widthMm?: number | null, lengthMm?: number | null): string {
+  const parts = [fmtDim(widthMm), fmtDim(lengthMm)].filter(Boolean);
+  return parts.length ? `${parts.join(" × ")} mm` : "";
+}
+
 /** Show a stored YYYY-MM-DD date as DD-MM-YYYY. Other text is left as entered. */
 export function fmtDate(v: unknown): string {
   if (v == null || v === "") return "";
