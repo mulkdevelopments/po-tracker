@@ -335,6 +335,41 @@ export function addWeeksISO(iso: string, weeks: number): string {
   return addDaysISO(base, weeks * 7);
 }
 
+/** Abitha production schedule: PI DATE = Production Begin − (14 × 7) days. */
+export const PI_WEEKS_BEFORE_BEGIN = 14;
+
+export function derivedPiDate(productionBegin: string | null | undefined): string | null {
+  const start = parseISODate(productionBegin);
+  if (!start) return null;
+  return addWeeksISO(start, -PI_WEEKS_BEFORE_BEGIN);
+}
+
+/**
+ * Keep PI date linked to production begin (Excel `=L-(14*7)`).
+ * Once PI is marked sent, leave the stored document date alone.
+ * Returns the piDate to write, or null when nothing should change.
+ */
+export function piDateFromBeginChange(opts: {
+  productionBegin?: string | null;
+  previousBegin?: string | null;
+  piDate?: string | null;
+  piSent?: string | null;
+  force?: boolean;
+}): string | null {
+  if (opts.piSent?.trim()) return null;
+  const begin = parseISODate(opts.productionBegin);
+  if (!begin) return null;
+  const derived = derivedPiDate(begin);
+  if (!derived) return null;
+  if (opts.force) return derived;
+  const prevBegin = parseISODate(opts.previousBegin);
+  const currentPi = parseISODate(opts.piDate);
+  if (!currentPi) return derived;
+  if (prevBegin && currentPi === derivedPiDate(prevBegin)) return derived;
+  if (prevBegin && prevBegin !== begin) return derived;
+  return null;
+}
+
 export function isPiSendCalendarDay(iso: string): boolean {
   const base = parseISODate(iso);
   if (!base) return false;
@@ -351,7 +386,7 @@ export function isPiDue(
     productionBegin?: string | null;
   },
   todayISO: string,
-  weeksBefore = 14,
+  weeksBefore = PI_WEEKS_BEFORE_BEGIN,
 ): boolean {
   if (p.active === false) return false;
   if (p.piSent?.trim()) return false;

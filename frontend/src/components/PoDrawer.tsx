@@ -4,6 +4,7 @@ import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, AuthUser, MasterData, PoLine, ReferenceData } from "../types";
 import { canAdvanceStage, canEditProductionActualsForPo, canEditPo, getAllowedAdvanceStages, api } from "../api";
 import { fmtMoney, fmtNum, fmtDate, fmtSizeMm, todayISO, addWeeksISO } from "../utils";
+import FastTip from "./FastTip";
 import {
   deriveStatusFromFields,
   resolvePipelineStatus,
@@ -706,23 +707,29 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <tbody>
                     {lines.map((row, i) => (
                       <tr key={i}>
-                        {editLineCols.map((c) => (
+                        {editLineCols.map((c) => {
+                          const val = row[c.k as string] ?? "";
+                          return (
                           <td key={c.k as string} className="p-0.5">
                             {c.money ? (
                               <MoneyInput
                                 className={c.w || "w-24"}
-                                value={row[c.k as string] ?? ""}
+                                value={val}
                                 onChange={(v) => setLineVal(i, c.k as string, v)}
+                                title={val || undefined}
                               />
                             ) : (
-                              <input
-                                className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
-                                value={row[c.k as string] ?? ""}
-                                onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
-                              />
+                              <FastTip text={val} className={c.w || "w-24"}>
+                                <input
+                                  className="w-full border border-slate-200 rounded px-1 py-1 text-xs"
+                                  value={val}
+                                  onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
+                                />
+                              </FastTip>
                             )}
                           </td>
-                        ))}
+                          );
+                        })}
                         <td className="p-0.5">
                           <button
                             type="button"
@@ -1266,7 +1273,10 @@ function buildInitialAdvanceFields(
     }
   }
   if (nextStage === "PI Generated") {
-    if (!out.piDate) out.piDate = todayISO();
+    if (!out.piDate) {
+      const begin = out.productionBegin || advanceVal(po.productionBegin) || advanceVal(po.productionStart);
+      out.piDate = begin ? addWeeksISO(begin, -14) : todayISO();
+    }
     if (!out.piValue && po.poValue != null) out.piValue = String(po.poValue);
   }
   if (nextStage === "PI Approved") {

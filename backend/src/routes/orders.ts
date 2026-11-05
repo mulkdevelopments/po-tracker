@@ -26,6 +26,7 @@ import {
   DEFAULT_LEAD_TIMES,
   derivedPlanningDate,
   numberProductionSequence,
+  piDateFromBeginChange,
   productionProgressUpdate,
   recalculateProductionDates,
   type CapacityConfig,
@@ -417,10 +418,18 @@ router.post("/recalculate-production", requireAuth, requirePage("production"), r
     for (const u of planned) {
       const data: Record<string, unknown> = {};
       if (u.writeBegin) {
+        const existingPo = pos.find((p) => p.id === u.id);
         data.productionBegin = u.productionBegin;
         data.productionStart = u.productionStart;
         data.planningDate = u.planningDate;
         data.productionBeginConfirmed = false;
+        const nextPi = piDateFromBeginChange({
+          productionBegin: u.productionBegin,
+          previousBegin: existingPo?.productionBegin,
+          piDate: existingPo?.piDate,
+          piSent: existingPo?.piSent,
+        });
+        if (nextPi) data.piDate = nextPi;
       }
       if (u.writeComplete) {
         data.productionComplete = u.productionComplete;
@@ -792,6 +801,18 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
     existing as unknown as Record<string, unknown>,
   );
   lockEditedProductionDates(existing, headerData);
+  if (headerData.productionBegin !== undefined && headerData.piDate === undefined) {
+    const nextPi = piDateFromBeginChange({
+      productionBegin: headerData.productionBegin as string | null | undefined,
+      previousBegin: existing.productionBegin,
+      piDate: existing.piDate,
+      piSent:
+        (headerData.piSent as string | null | undefined) !== undefined
+          ? (headerData.piSent as string | null | undefined)
+          : existing.piSent,
+    });
+    if (nextPi) headerData.piDate = nextPi;
+  }
   if (parsed.data.status === undefined || parsed.data.productionStatus === undefined) {
     const progress = productionProgressUpdate(
       { ...existing, ...headerData },

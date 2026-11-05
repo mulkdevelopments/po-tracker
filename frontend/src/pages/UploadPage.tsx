@@ -15,6 +15,7 @@ import {
 import { extractSynergyPdfPages } from "../synergyPdf";
 import { fmtMoney, fmtNum, fmtDate, todayISO } from "../utils";
 import MoneyInput from "../components/MoneyInput";
+import FastTip from "../components/FastTip";
 import { LINE_RECOMPUTE_KEYS, type LineForm as SharedLineForm } from "../lineMath";
 import {
   computeLineWithCatalog,
@@ -1004,32 +1005,38 @@ export default function UploadPage() {
                       className={mismatch ? "bg-red-50" : undefined}
                       title={mismatch ? describeMismatch(mismatch) : undefined}
                     >
-                      {lineCols.map((c) => (
+                      {lineCols.map((c) => {
+                        const val = row[c.k as string] ?? "";
+                        return (
                         <td key={c.k as string} className="p-0.5">
                           {c.money ? (
                             <MoneyInput
                               className={c.w || "w-24"}
-                              value={row[c.k as string] ?? ""}
+                              value={val}
                               onChange={(v) => setLineVal(i, c.k as string, v)}
+                              title={val || undefined}
                             />
                           ) : (
-                            <input
-                              className={`border border-slate-200 rounded px-1 py-1 text-xs ${c.w || "w-24"}`}
-                              value={row[c.k as string] ?? ""}
-                              onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
-                              onBlur={() =>
-                                c.k === "partNo"
-                                  ? applyProduct(i)
-                                  : (LINE_RECOMPUTE_KEYS as readonly string[]).includes(
-                                        c.k as string,
-                                      )
-                                    ? recompute(i, c.k as string)
-                                    : undefined
-                              }
-                            />
+                            <FastTip text={val} className={c.w || "w-24"}>
+                              <input
+                                className="w-full border border-slate-200 rounded px-1 py-1 text-xs"
+                                value={val}
+                                onChange={(e) => setLineVal(i, c.k as string, e.target.value)}
+                                onBlur={() =>
+                                  c.k === "partNo"
+                                    ? applyProduct(i)
+                                    : (LINE_RECOMPUTE_KEYS as readonly string[]).includes(
+                                          c.k as string,
+                                        )
+                                      ? recompute(i, c.k as string)
+                                      : undefined
+                                }
+                              />
+                            </FastTip>
                           )}
                         </td>
-                      ))}
+                        );
+                      })}
                       <td className="p-0.5">
                         <button type="button" onClick={() => removeLine(i)} className="text-red-500 hover:text-red-700 px-1" title="Remove line">×</button>
                       </td>

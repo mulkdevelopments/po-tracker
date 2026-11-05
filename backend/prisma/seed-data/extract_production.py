@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Extract the UFP Production Schedule into production.json. Run from the
-workbook directory:
+"""Extract the UFP Production Schedule into production.json.
 
-    python3 backend/prisma/seed-data/extract_production.py "UFP  Production Schedule (2).xlsx"
+    python3 backend/prisma/seed-data/extract_production.py "path/to/UFP Production Schedule.xlsx"
 
-Columns are resolved by header name (layout-safe across workbook revisions).
-Each row maps to an existing PurchaseOrder by (poNo, rev); the seed applies the
-production-side fields onto the matching order.
+Columns are resolved by header name. Row order becomes productionSequence.
+Yellow/orange date cells are tentative; green (or other filled) dates are confirmed.
+PI DATE in the workbook is Production Begin − 14 weeks (=L-(14*7)).
 """
 import json
 import sys
@@ -21,20 +20,30 @@ warnings.filterwarnings("ignore")
 SRC = sys.argv[1] if len(sys.argv) > 1 else "UFP  Production Schedule.xlsx"
 OUT = Path(__file__).resolve().parent / "production.json"
 
-# Column layouts differ between workbook revisions. Map by header name when
-# possible so extractors survive column inserts/deletes.
 FIELD_ALIASES = {
     "poNo": ("PO#", "PO #", "PO"),
     "rev": ("Rev#", "Rev #", "Rev"),
     "soNo": ("SO", "SO#", "SO #"),
-    "standardColorsOnly": ("Standard Colors Only?", "Standard Colors Only"),
+    "standardColorsOnly": ("Standard Colors Only?", "Standard Colors Only", "Colors Only?"),
     "allMaterialAvailable": ("All Material Available",),
     "productionBegin": ("Production Begin",),
     "productionComplete": ("Production Complete",),
     "dispatchFromFactory": ("Dispatch from Factory",),
+    "piDate": ("PI DATE", "PI Date", "PI date"),
     "piSent": ("PI Sent?", "PI Sent"),
     "productionStatus": ("STATUS", "Status"),
     "productionNotes": ("Notes", "Note"),
+}
+
+# Excel estimated-date fills (Abitha legend: yellow). Everything else filled = confirmed/green.
+ESTIMATED_RGB = {
+    "FFFFC000",  # orange/amber used in current workbook
+    "FFFFFF00",
+    "FFFFEB9C",
+    "FFFFF2CC",
+    "FFFFF200",
+    "00FFC000",
+    "00FFFF00",
 }
 
 
@@ -43,10 +52,17 @@ def cell(v):
         return None
     if isinstance(v, (datetime.datetime, datetime.date)):
         return v.strftime("%Y-%m-%d")
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    if isinstance(v, (int, float)):
+        # Notes / flags sometimes land as bare numbers in Excel.
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        return str(v).strip() or None
     if isinstance(v, str):
         s = v.strip()
         return s if s else None
-    return v
+    return str(v).strip() or None
 
 
 def as_int(v):
@@ -58,8 +74,23 @@ def as_int(v):
         return None
 
 
-def header_map(ws, header_row=4):
-    """Map normalized header text -> 1-based column index."""
+def find_header_row(ws, max_scan=20):
+    for r in range(1, max_scan + 1):
+        vals = []
+        for c in range(1, ws.max_column + 1):
+            raw = ws.cell(r, c).value
+            if raw is None:
+                continue
+            vals.append(str(raw).strip())
+        joined = " | ".join(vals).lower()
+        if "po#" in joined.replace(" ", "") or ("po #" in joined and "production begin" in joined):
+            return r
+        if "production begin" in joined and ("po#" in joined.replace(" ", "") or "po #" in joined):
+            return r
+    raise KeyError("Could not find header row with PO# / Production Begin")
+
+
+def header_map(ws, header_row):
     mapping = {}
     for c in range(1, ws.max_column + 1):
         raw = ws.cell(header_row, c).value
@@ -78,33 +109,85 @@ def col(mapping, *names):
     raise KeyError(f"Missing column(s): {names}")
 
 
+def is_estimated_fill(cell):
+    fill = cell.fill
+    if not fill or fill.fill_type in (None, "none"):
+        return False
+    fg = fill.fgColor
+    if fg is None:
+        return False
+    if fg.type == "rgb" and fg.rgb:
+        rgb = str(fg.rgb).upper()
+        return rgb in ESTIMATED_RGB or rgb.endswith("FFC000") or rgb.endswith("FFFF00") or rgb.endswith("FFEB9C")
+    # Theme / indexed solids in this workbook are the green "confirmed" cells.
+    return False
+
+
+def date_confirmed(ws_styles, row, col_idx, value):
+    """True when the date cell looks green/confirmed; False when yellow/estimated or blank."""
+    if not value:
+        return False
+    cell = ws_styles.cell(row, col_idx)
+    fill = cell.fill
+    if not fill or fill.fill_type in (None, "none"):
+        return False
+    if is_estimated_fill(cell):
+        return False
+    return True
+
+
 def main():
-    wb = openpyxl.load_workbook(SRC, data_only=True)
-    ws = wb["Order Level"]
-    headers = header_map(ws)
+    wb_vals = openpyxl.load_workbook(SRC, data_only=True)
+    wb_styles = openpyxl.load_workbook(SRC, data_only=False)
+    sheet = "Order Level" if "Order Level" in wb_vals.sheetnames else wb_vals.sheetnames[0]
+    ws = wb_vals[sheet]
+    ws_styles = wb_styles[sheet]
+    header_row = find_header_row(ws)
+    headers = header_map(ws, header_row)
     cols = {field: col(headers, *aliases) for field, aliases in FIELD_ALIASES.items()}
+
     rows = []
-    for r in range(5, ws.max_row + 1):
+    seq = 0
+    for r in range(header_row + 1, ws.max_row + 1):
         po = ws.cell(r, cols["poNo"]).value
         if not po:
             continue
+        seq += 10
+        begin = cell(ws.cell(r, cols["productionBegin"]).value)
+        complete = cell(ws.cell(r, cols["productionComplete"]).value)
+        dispatch = cell(ws.cell(r, cols["dispatchFromFactory"]).value)
+        status = cell(ws.cell(r, cols["productionStatus"]).value)
+        if isinstance(status, str):
+            status = status.strip() or None
         rows.append({
             "poNo": str(po).strip(),
             "rev": as_int(ws.cell(r, cols["rev"]).value) or 0,
             "soNo": cell(ws.cell(r, cols["soNo"]).value),
             "standardColorsOnly": cell(ws.cell(r, cols["standardColorsOnly"]).value),
             "allMaterialAvailable": cell(ws.cell(r, cols["allMaterialAvailable"]).value),
-            "productionBegin": cell(ws.cell(r, cols["productionBegin"]).value),
-            "productionComplete": cell(ws.cell(r, cols["productionComplete"]).value),
-            "dispatchFromFactory": cell(ws.cell(r, cols["dispatchFromFactory"]).value),
+            "productionBegin": begin,
+            "productionComplete": complete,
+            "dispatchFromFactory": dispatch,
+            "piDate": cell(ws.cell(r, cols["piDate"]).value),
             "piSent": cell(ws.cell(r, cols["piSent"]).value),
-            "productionStatus": cell(ws.cell(r, cols["productionStatus"]).value),
+            "productionStatus": status,
             "productionNotes": cell(ws.cell(r, cols["productionNotes"]).value),
+            "productionSequence": seq,
+            "productionBeginConfirmed": date_confirmed(ws_styles, r, cols["productionBegin"], begin),
+            "productionCompleteConfirmed": date_confirmed(ws_styles, r, cols["productionComplete"], complete),
+            "dispatchConfirmed": date_confirmed(ws_styles, r, cols["dispatchFromFactory"], dispatch),
         })
+
     OUT.write_text(json.dumps(rows, indent=2))
-    print(f"Wrote {len(rows)} production rows to {OUT}")
+    print(f"Wrote {len(rows)} production rows to {OUT} (header row {header_row})")
     from collections import Counter
     print("STATUS:", dict(Counter(r["productionStatus"] for r in rows)))
+    print(
+        "confirmed begin/complete/dispatch:",
+        sum(1 for r in rows if r["productionBeginConfirmed"]),
+        sum(1 for r in rows if r["productionCompleteConfirmed"]),
+        sum(1 for r in rows if r["dispatchConfirmed"]),
+    )
 
 
 if __name__ == "__main__":
