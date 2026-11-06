@@ -88,7 +88,6 @@ export default function ProductionPage() {
   const [openCol, setOpenCol] = useState<string | null>(null);
   const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
   const [dragId, setDragId] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
   const dragged = useRef(false);
   const filterOpenerRef = useRef<HTMLButtonElement | null>(null);
   const writable = canEdit();
@@ -216,7 +215,6 @@ export default function ProductionPage() {
   };
 
   const persistOrder = async (ordered: PurchaseOrder[]) => {
-    setBusy(true);
     try {
       const { pos: updated } = await api.reorderProduction(
         ordered.map((p) => p.id),
@@ -227,8 +225,6 @@ export default function ProductionPage() {
     } catch (e) {
       alert(e instanceof Error ? e.message : "Reorder failed");
       await load();
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -258,35 +254,12 @@ export default function ProductionPage() {
 
   const confirmDate = async (p: PurchaseOrder, flag: FlagKey, value: boolean, extra?: Record<string, unknown>) => {
     if (!writable) return;
-    setBusy(true);
     try {
       const { po } = await api.updateOrder(p.id, { [flag]: value, ...extra });
       setPos((prev) => prev.map((x) => (x.id === po.id ? po : x)));
       setSelected((cur) => (cur?.id === po.id ? po : cur));
     } catch (e) {
       alert(e instanceof Error ? e.message : "Could not update the date");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const recalculate = async () => {
-    if (
-      !confirm(
-        "Recalculate the schedule? Completion is 2 days after the production start, and dispatch is 3 days after completion. A start date marked correct is kept.",
-      )
-    ) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const { pos: list, updatedCount, statusCount } = await api.recalculateProduction("replan");
-      setPos(list);
-      alert(`Updated dates on ${updatedCount} order(s)${statusCount ? ` · status moved on ${statusCount}` : ""}.`);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Recalculate failed");
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -317,22 +290,34 @@ export default function ProductionPage() {
               <X size={14} /> Clear {activeFilterCount} filter{activeFilterCount > 1 ? "s" : ""}
             </button>
           )}
-          {writable && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={recalculate}
-              className="px-3 py-1.5 text-sm rounded-md border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
-            >
-              Recalculate schedule
-            </button>
-          )}
           <span className="text-sm text-slate-500 ml-auto">{rows.length} orders</span>
         </div>
-        <div className="px-3 py-1.5 text-[11px] text-slate-500 border-b border-slate-100 bg-slate-50">
-          Unshipped rows are yellow. Drag a row to the top to mark it urgent. Yellow dates are tentative and green dates are correct.
-          {" "}Command+Down or Option+Down opens a column filter, arrows move the selection, and Esc closes it.
-          {writable ? " Click a date to switch it." : ""} A rose PO # uses non-standard colours.
+        <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-slate-600">
+          <span className="font-semibold text-slate-500 uppercase tracking-wide">Legend</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block w-4 h-3 rounded-sm border border-yellow-200 bg-[#fef9c3]" />
+            Not shipped
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block w-4 h-3 rounded-sm border border-orange-200 bg-[#fff7ed]" />
+            Urgent — drag to the top
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block px-1.5 rounded-sm border border-yellow-300 bg-[#fef9c3] text-[#854d0e]">date</span>
+            Tentative
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block px-1.5 rounded-sm border border-green-200 bg-[#dcfce7] text-[#166534]">date</span>
+            Confirmed
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="po-nonstandard">PO #</span>
+            Non-standard colours
+          </span>
+          <span className="text-slate-400">
+            {writable ? "Click a date to switch it. " : ""}
+            Command+Down or Option+Down opens a filter.
+          </span>
         </div>
         <div
           className="overflow-x-auto"
