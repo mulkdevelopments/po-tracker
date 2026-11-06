@@ -4,27 +4,14 @@ import { useAuth } from "../AuthContext";
 import { STAGE_COLORS } from "../types";
 import type { PurchaseOrder, ReferenceData, AppConfigData } from "../types";
 import { fmtMoney, fmtNum, fmtDate } from "../utils";
-import { computeDashboard, statusMix, totalRow, dashboardActiveYearOrders, orderStatusGroup, type VolumeRow, type DashboardScope } from "../reports";
+import { availableYears, computeDashboard, statusMix, totalRow, dashboardActiveYearOrders, orderStatusGroup, type VolumeRow, type DashboardScope } from "../reports";
 import type { Company } from "../companies";
-import { StatusDoughnut, AnnualSalesPanel, CapacityPanel, DashboardYearFilter } from "../components/DashboardCharts";
+import { StatusDoughnut, AnnualSalesPanel, CapacityPanel } from "../components/DashboardCharts";
 import PoDrawer from "../components/PoDrawer";
-import StockingEmailNotice from "../components/StockingEmailNotice";
-import PiDueNotice from "../components/PiDueNotice";
-import { usePendingStockingEmails } from "../hooks/usePendingStockingEmails";
-import { canMarkStockingEmailRole } from "../stockingEmail";
-import { pendingPiDue } from "../piDue";
-import { canMarkPiEmailRole } from "../piEmail";
 import { useCompany } from "../CompanyContext";
 import { notifyPoUpdated } from "../poEvents";
 import type { MasterData } from "../types";
-
-const DASHBOARD_YEAR_KEY = "dashboard_year";
-
-function readStoredYear(): number {
-  const raw = localStorage.getItem(DASHBOARD_YEAR_KEY);
-  const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) ? n : new Date().getFullYear();
-}
+import { DashboardSkeleton } from "../components/Skeleton";
 
 function shortLoc(l: string) {
   return l.split(",")[0];
@@ -155,15 +142,10 @@ function VolumeTable({ title, rows, year }: { title: string; rows: VolumeRow[]; 
 
 export default function DashboardPage() {
   const { user, canEdit } = useAuth();
-  const { company } = useCompany();
-  const [scope, setScope] = useState<DashboardScope>(company);
-  const showStockingEmailQueue = canMarkStockingEmailRole(user?.role);
-  const showPiQueue = canMarkPiEmailRole(user?.role);
-  const { pending: pendingStockingEmail } = usePendingStockingEmails(!!showStockingEmailQueue);
+  const { company, scope, year, setYears } = useCompany();
   const [packs, setPacks] = useState<CompanyPack[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [year, setYear] = useState(readStoredYear);
   const [statusDetail, setStatusDetail] = useState<string | null>(null);
   const [selected, setSelected] = useState<PurchaseOrder | null>(null);
 
@@ -201,17 +183,16 @@ export default function DashboardPage() {
     };
   }, [scope]);
 
-  const setDashboardYear = (y: number) => {
-    setYear(y);
-    localStorage.setItem(DASHBOARD_YEAR_KEY, String(y));
-  };
-
   const openPoFromStatusModal = (po: PurchaseOrder) => {
     setStatusDetail(null);
     setSelected(po);
   };
 
   const pos = useMemo(() => packs.flatMap((p) => p.pos), [packs]);
+
+  useEffect(() => {
+    if (!loading) setYears(availableYears(pos));
+  }, [pos, loading, setYears]);
   const ref = useMemo(() => {
     if (packs.length === 2) return mergeRefs(packs[0].ref, packs[1].ref);
     return packs[0]?.ref ?? null;
@@ -221,9 +202,7 @@ export default function DashboardPage() {
     ? (packs.find((p) => p.company === (selected.company ?? company))?.master ?? {})
     : {};
 
-  const piDue = useMemo(() => (showPiQueue ? pendingPiDue(pos) : []), [showPiQueue, pos]);
-
-  if (loading) return <div className="text-slate-500">Loading dashboard…</div>;
+  if (loading) return <DashboardSkeleton />;
   if (error || !ref) {
     return (
       <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-800">
@@ -245,38 +224,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {showStockingEmailQueue && pendingStockingEmail.length > 0 && (
-        <StockingEmailNotice pending={pendingStockingEmail} onOpenPo={(po) => setSelected(po)} />
-      )}
-      {showPiQueue && piDue.length > 0 && (
-        <PiDueNotice pending={piDue} onOpenPo={(po) => setSelected(po)} />
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">{yearScope}</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex rounded-md border border-slate-300 overflow-hidden text-sm" role="group" aria-label="Company">
-            {([
-              ["UFP", "UFP"],
-              ["SYNERGY", "Cynergy"],
-              ["BOTH", "Both"],
-            ] as const).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={scope === id}
-                onClick={() => setScope(id)}
-                className={`px-3 py-1.5 ${
-                  scope === id ? "bg-indigo-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <DashboardYearFilter pos={pos} year={year} onYear={setDashboardYear} />
-        </div>
-      </div>
+      <p className="text-sm text-slate-500">{yearScope}</p>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
@@ -286,9 +234,14 @@ export default function DashboardPage() {
           ["Arrived", String(d.kpis.arrived), "text-emerald-700"],
           ["Total PO Value", fmtMoney(d.kpis.totalValue), "text-violet-700"],
         ].map(([label, val, cls]) => (
-          <div key={label} className="rounded-lg border border-slate-200 bg-white p-4">
+          <div key={label} className="@container min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white p-4">
             <div className="text-xs text-slate-500 mb-1">{label}</div>
-            <div className={`text-2xl font-bold ${cls}`}>{val}</div>
+            <div
+              className={`max-w-full font-bold tabular-nums tracking-tight leading-tight whitespace-nowrap text-[clamp(0.7rem,8.2cqi,1.5rem)] ${cls}`}
+              title={val}
+            >
+              {val}
+            </div>
           </div>
         ))}
       </div>

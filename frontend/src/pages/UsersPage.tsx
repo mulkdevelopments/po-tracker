@@ -3,6 +3,7 @@ import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { ROLE_LABELS, PAGES, ASSIGNABLE_ROLES } from "../types";
 import type { AppUser } from "../types";
+import { TableSkeleton } from "../components/Skeleton";
 
 export default function UsersPage() {
   const { isSuperAdmin } = useAuth();
@@ -99,7 +100,7 @@ export default function UsersPage() {
     }));
   };
 
-  if (loading) return <div className="text-slate-500">Loading users…</div>;
+  if (loading) return <TableSkeleton rows={6} />;
 
   return (
     <div className="space-y-6">

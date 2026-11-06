@@ -144,10 +144,11 @@ def extract_orders(wb):
         13: "productionEtc", 14: "shippingEta", 15: "bol", 16: "isf",
         17: "containerNo", 18: "shippingLine", 19: "shippingUrl",
         20: "actualDeparture", 21: "ciNo", 22: "ciDate", 23: "freight",
-        24: "ciValue", 25: "telexDate",
+        24: "ciValue", 25: "telexDate", 26: "arrivalDate", 27: "bpDate",
+        28: "ciToBp", 29: "bpAmount",
     }
-    INT_FIELDS = {"siNo", "rev"}
-    FLOAT_FIELDS = {"skids", "poValue", "totalM2", "freight", "ciValue"}
+    INT_FIELDS = {"siNo", "rev", "ciToBp"}
+    FLOAT_FIELDS = {"skids", "poValue", "totalM2", "freight", "ciValue", "bpAmount"}
 
     orders = {}
     for r in range(3, os_ws.max_row + 1):
@@ -169,11 +170,22 @@ def extract_orders(wb):
         # Fields UFP has that Cynergy's sheet does not — keep keys for a uniform seed.
         for missing in (
             "piNo", "piDate", "poToPi", "piValue", "dpDate", "piToDp", "dpAmount",
-            "dpToShip", "revisionSent", "inland", "balanceDue", "bpDate", "ciToBp",
-            "bpAmount", "bpToTelex", "arrivalDate",
+            "dpToShip", "revisionSent", "inland", "balanceDue", "bpToTelex",
         ):
             rec.setdefault(missing, None)
-        # Default inland from Master Data (Savannah) when freight is present.
+        # The "CI net" cell is PO value + freight. Freight is its own column, so the
+        # invoice value stored here is the goods amount — otherwise freight is counted twice.
+        freight = rec.get("freight") or 0
+        po_value = rec.get("poValue")
+        ci_value = rec.get("ciValue")
+        if (
+            isinstance(po_value, (int, float))
+            and isinstance(ci_value, (int, float))
+            and freight
+            and abs(ci_value - (po_value + freight)) <= 1
+        ):
+            rec["ciValue"] = po_value
+        # Inland is always 1,000 once a shipment has freight.
         if rec.get("freight") is not None and rec.get("inland") is None:
             rec["inland"] = 1000
         rec["lines"] = []
@@ -206,6 +218,7 @@ def extract_orders(wb):
             size = f'{width_in}" x {length_in}"'
         line = {
             "lineNo": as_int(od.cell(r, 6).value),
+            "active": as_bool(od.cell(r, 4).value),
             "partNo": part_no,
             "custPartNo": None,
             "size": size,

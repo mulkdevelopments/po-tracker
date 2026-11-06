@@ -4,6 +4,7 @@ import { useAuth } from "../AuthContext";
 import type { ReferenceData, PiDocumentSettings } from "../types";
 import { fmtNum, fmtDate, isValidEmail } from "../utils";
 import { DEFAULT_PI_DOCUMENT, piDocumentFromMaster } from "../piDocument";
+import { BusyLabel, CardGridSkeleton } from "../components/Skeleton";
 
 type Row = { id: number; [k: string]: unknown };
 type ColType = "text" | "number" | "bool" | "email";
@@ -340,7 +341,7 @@ function ProductionCapacityCard({ ref, canEdit, onSaved }: { ref: ReferenceData;
           <div className="flex gap-2 justify-end">
             <button type="button" onClick={() => setEditing(null)} className="px-3 py-1.5 text-xs border border-slate-300 rounded-md">Cancel</button>
             <button type="button" disabled={busy} onClick={() => void save()} className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md disabled:opacity-50">
-              {busy ? "Saving…" : "Save"}
+              <BusyLabel busy={busy} className="h-3 w-10">Save</BusyLabel>
             </button>
           </div>
         </div>
@@ -415,7 +416,7 @@ function ConfigCard({ ref, canEdit, onSaved }: { ref: ReferenceData; canEdit: bo
       ))}
       {canEdit && (
         <button type="button" disabled={busy} onClick={save} className="mt-1 self-end px-3 py-1.5 bg-indigo-600 text-white text-xs rounded-md disabled:opacity-50">
-          {busy ? "Saving…" : "Save defaults"}
+          <BusyLabel busy={busy} className="h-3 w-20">Save defaults</BusyLabel>
         </button>
       )}
     </div>
@@ -552,7 +553,7 @@ function ProductionSitesCard({
         onClick={() => void save()}
         className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md disabled:opacity-50"
       >
-        {busy ? "Saving…" : "Save production sites"}
+        <BusyLabel busy={busy} className="h-3 w-32">Save production sites</BusyLabel>
       </button>
     </div>
   );
@@ -615,7 +616,7 @@ function PiEmailsCard({
         onClick={() => void save()}
         className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md disabled:opacity-50"
       >
-        {busy ? "Saving…" : "Save PI emails"}
+        <BusyLabel busy={busy} className="h-3 w-24">Save PI emails</BusyLabel>
       </button>
     </div>
   );
@@ -749,7 +750,7 @@ function PiDocumentCard({
         onClick={() => void save()}
         className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md disabled:opacity-50"
       >
-        {busy ? "Saving…" : "Save PI document settings"}
+        <BusyLabel busy={busy} className="h-3 w-40">Save PI document settings</BusyLabel>
       </button>
     </div>
   );
@@ -769,7 +770,7 @@ export default function MasterPage() {
   };
   useEffect(() => { load(); }, []);
 
-  if (loading || !ref) return <div className="text-slate-500">Loading…</div>;
+  if (loading || !ref) return <CardGridSkeleton cards={4} />;
   const writable = canEdit();
 
   return (

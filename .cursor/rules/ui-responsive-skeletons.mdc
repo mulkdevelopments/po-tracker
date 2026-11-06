@@ -1,0 +1,11 @@
+---
+description: Responsive layout and skeleton loaders for PO Tracker UI
+alwaysApply: true
+---
+
+# UI: responsive layout and skeletons
+
+- Build every screen so it works on phone, tablet, and desktop. Stack controls on small screens, use the existing sidebar below `lg` and the full layout from `lg` up. Do not add a layout that only fits a wide desktop.
+- While data or an action is loading, show a skeleton placeholder from `frontend/src/components/Skeleton.tsx`. Do not show the words Loading, Saving, Preparing, Signing in, Deleting, Submitting, Working, or Applying.
+- Page loads use `DashboardSkeleton`, `TableSkeleton`, `CardGridSkeleton`, or `AppBootSkeleton`. In-progress buttons use `BusyLabel`. Document previews use `PdfSkeleton`.
+---

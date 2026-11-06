@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import type { AuthUser, PurchaseOrder } from "../types";
 import { fmtDate } from "../utils";
+import { BusyLabel } from "./Skeleton";
 import {
   buildStockingMailto,
   canMarkStockingEmailRole,
@@ -103,7 +104,7 @@ export default function StockingEmailQueue({ po, user, locations, onUpdated }: P
             onClick={() => void markSent()}
             className="px-3 py-1.5 border border-violet-400 bg-white text-violet-900 text-xs font-medium rounded-md hover:bg-violet-100 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {busy ? "Saving…" : sent ? "Marked as sent" : "Mark as sent"}
+            <BusyLabel busy={busy} className="h-3 w-20">{sent ? "Marked as sent" : "Mark as sent"}</BusyLabel>
           </button>
         </div>
       </div>

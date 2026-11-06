@@ -60,7 +60,11 @@ const TOTAL_OF_LINES: Record<string, string> = {
 };
 
 function sumLines(lines: Record<string, unknown>[], field: string): number {
-  return lines.reduce((t, l) => t + (Number(l[field]) || 0), 0);
+  return lines.reduce((t, l) => {
+    // Cynergy marks a cancelled line Active = No. The sheet total excludes it.
+    if (l.active === false) return t;
+    return t + (Number(l[field]) || 0);
+  }, 0);
 }
 
 /**
@@ -182,10 +186,18 @@ async function run(company: Company, apply: boolean) {
       continue;
     }
 
-    const trackerLines = (o.lines ?? []).map(orderLineFromTracker);
-    const reconciled = reconcileHeaderWithLines(orderHeaderFromTracker(o), trackerLines);
+    const rawLines = o.lines ?? [];
+    const trackerLines = rawLines.map(orderLineFromTracker);
+    const reconciled = reconcileHeaderWithLines(orderHeaderFromTracker(o), rawLines);
     for (const note of reconciled.notes) {
       reconcileLog.push(`${poNo} r${rev} ${note}`);
+    }
+
+    // Unsettled orders otherwise recompute balance from the CI cell. That cell
+    // is already PI + freight + inland, so the recomputation adds the charges
+    // a second time. The sheet's own balance column is the figure to keep.
+    if (typeof o.balanceDue === "number" && !same(reconciled.header.balanceDue, o.balanceDue)) {
+      reconciled.header.balanceDue = o.balanceDue;
     }
 
     const current = po as unknown as Record<string, unknown>;
@@ -209,6 +221,22 @@ async function run(company: Company, apply: boolean) {
 
     const wantedHeader = reconciled.header;
     const header = diffFields(current, wantedHeader, skip, company);
+    // The sheet's CI cell is PI + freight + inland. Where the app already
+    // keeps those charges in their own columns, writing the cell back would
+    // count freight twice, and the derived balance would rise by the same amount.
+    const charges =
+      (Number(current.freight ?? wantedHeader.freight) || 0) +
+      (Number(current.inland ?? wantedHeader.inland) || 0);
+    if (header.data.ciValue != null && charges > 0) {
+      const base = Number(current.ciValue);
+      const sheetCi = Number(wantedHeader.ciValue);
+      if (Number.isFinite(base) && Number.isFinite(sheetCi) && Math.abs(sheetCi - (base + charges)) <= 1) {
+        delete header.data.ciValue;
+        header.fills = header.fills.filter((f) => f !== "ciValue");
+        header.overwrites = header.overwrites.filter((f) => f !== "ciValue");
+        header.ignored.push("ciValue");
+      }
+    }
     fillCount += header.fills.length;
     const describe = (f: string) =>
       `${poNo} r${rev} ${f}: app "${current[f]}" -> ` +

@@ -16,6 +16,7 @@ import { expectedBalanceDue } from "../paymentFlags";
 import { applyPortCharges } from "../portCharges";
 import { matchStockingLocation } from "../stockingLocation";
 import { derivedPlanningDate } from "../productionSchedule";
+import { BusyLabel, FormSkeleton } from "./Skeleton";
 
 function toStr(v: unknown): string {
   if (v == null || v === "N/A") return "";
@@ -249,7 +250,7 @@ export default function StageMilestoneEditor({
 
         <div className="p-5 space-y-3 overflow-y-auto">
           {loading ? (
-            <p className="text-sm text-slate-500">Loading…</p>
+            <FormSkeleton fields={4} />
           ) : (
             defs.map((f) => (
               <div key={f.k}>
@@ -362,7 +363,7 @@ export default function StageMilestoneEditor({
               onClick={() => void save()}
               className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md disabled:opacity-50"
             >
-              {saving ? "Saving…" : "Save"}
+              <BusyLabel busy={saving} className="h-3 w-10">Save</BusyLabel>
             </button>
           </div>
         </div>

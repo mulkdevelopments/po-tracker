@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { STAGE_COLORS } from "../types";
-import type { PurchaseOrder, AuthUser, MasterData, PoLine, ReferenceData } from "../types";
+import type { PurchaseOrder, AuthUser, MasterData, ReferenceData } from "../types";
 import { canAdvanceStage, canEditProductionActualsForPo, canEditPo, getAllowedAdvanceStages, api } from "../api";
-import { fmtMoney, fmtNum, fmtDate, fmtSizeMm, todayISO, addWeeksISO } from "../utils";
+import { fmtMoney, fmtDate, todayISO, addWeeksISO } from "../utils";
+import { ciFileName, piFileName } from "../docFileNames";
 import FastTip from "./FastTip";
+import { BusyLabel } from "./Skeleton";
 import {
   deriveStatusFromFields,
   resolvePipelineStatus,
@@ -13,10 +15,9 @@ import {
 } from "../workflows";
 import MoneyInput from "./MoneyInput";
 import PiPdfPreview from "./PiPdfPreview";
-import PipelineProgress from "./PipelineProgress";
 import PipelineStepActions from "./PipelineStepActions";
 import StageMilestoneEditor from "./StageMilestoneEditor";
-import { DRAWER_SECTIONS as EDIT_SECTIONS, LINE_COLS, lineColsFor } from "../poFields";
+import { DRAWER_SECTIONS as EDIT_SECTIONS, lineColsFor } from "../poFields";
 import { LINE_RECOMPUTE_KEYS, lineFormTotals } from "../lineMath";
 import {
   catalogMap,
@@ -25,12 +26,6 @@ import {
   priceAsOfFor,
   type CatalogProduct,
 } from "../lineCatalog";
-import {
-  describeMismatch,
-  linePriceMismatch,
-  linePriceMismatches,
-  poTotalMismatch,
-} from "../priceCompare";
 import {
   PI_PENDING_STATUS,
   PI_REJECTED_STATUS,
@@ -47,49 +42,18 @@ import { derivedPlanningDate } from "../productionSchedule";
 import { autoShippingUrl } from "../shippingTracking";
 import ResubmitTag from "./ResubmitTag";
 import { ProductionCompleteTrigger, ProductionActualsEditTrigger } from "./ProductionCompleteAdvance";
-import StockingEmailQueue from "./StockingEmailQueue";
-import PiEmailQueue from "./PiEmailQueue";
 import {
   balancePaymentFlag,
   downpaymentFlag,
   expectedBalanceDue,
   paymentTolerance,
-  resolveGrossInvoiceValue,
   shownBalanceDue,
-  sumLineExtInv,
-  sumLineExtPo,
 } from "../paymentFlags";
 import { applyPortCharges, rateForPort } from "../portCharges";
 import { matchStockingLocation } from "../stockingLocation";
 
 function ModalPortal({ children }: { children: React.ReactNode }) {
   return createPortal(children, document.body);
-}
-
-function lineHasActuals(l: PoLine) {
-  return l.actualQtyM2 != null || l.actualSheets != null || l.actualSkids != null;
-}
-
-function actualCellClass(actual: number | null | undefined, ordered: number | null | undefined) {
-  if (actual == null || ordered == null) return "";
-  if (actual >= ordered) return "bg-emerald-50 text-emerald-800 border border-emerald-200";
-  return "bg-red-50 text-red-800 border border-red-200";
-}
-
-function ActualQtyCell({
-  actual,
-  ordered,
-  decimals,
-}: {
-  actual: number | null | undefined;
-  ordered: number | null | undefined;
-  decimals: number;
-}) {
-  if (actual == null) return <span className="text-slate-300">—</span>;
-  const cls = actualCellClass(actual, ordered);
-  return (
-    <span className={`inline-block px-1.5 py-0.5 rounded ${cls}`}>{fmtNum(actual, decimals)}</span>
-  );
 }
 
 interface Props {
@@ -159,20 +123,15 @@ function Section({
   );
 }
 
-type DrawerTab = "summary" | "progress" | "details" | "history";
+type DrawerTab = "documents" | "details" | "history";
 
 const DRAWER_TABS: { id: DrawerTab; label: string }[] = [
-  { id: "summary", label: "Summary" },
-  { id: "progress", label: "Progress" },
+  { id: "documents", label: "Documents" },
   { id: "details", label: "Details" },
   { id: "history", label: "History" },
 ];
 
 type LineForm = Record<string, string>;
-
-function toStr(v: unknown): string {
-  return v == null ? "" : String(v);
-}
 
 export default function PoDrawer({ po, user, master, onClose, onUpdated, onDeleted, canEdit }: Props) {
   const company = (po.company ?? "UFP") as WorkflowCompany;
@@ -195,14 +154,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
   const payTol = paymentTolerance(master);
   const dpPayFlag = downpaymentFlag(po, master.downpaymentPct ?? 0.5, payTol);
   const bpPayFlag = balancePaymentFlag(po, payTol);
-  const payAlerts = [dpPayFlag, bpPayFlag].filter(
-    (f): f is NonNullable<typeof f> => !!f && f.kind !== "ok",
-  );
-  const payBannerTone = payAlerts.some((f) => f.kind === "under")
-    ? "under"
-    : payAlerts.some((f) => f.kind === "over")
-      ? "over"
-      : null;
+  const documentCount = (po.piNo?.trim() ? 1 : 0) + (po.ciNo?.trim() ? 1 : 0);
 
   const editSections = useMemo(
     () =>
@@ -229,11 +181,11 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     { name: string; email: string | null; arrivalPort: string | null }[]
   >([]);
   const [products, setProducts] = useState<CatalogProduct[]>([]);
-  const [tab, setTab] = useState<DrawerTab>("summary");
+  const [tab, setTab] = useState<DrawerTab>("documents");
   const [editStageId, setEditStageId] = useState<string | null>(null);
 
   useEffect(() => {
-    setTab("summary");
+    setTab("documents");
     setEditing(false);
     setEditStageId(null);
   }, [po.id]);
@@ -329,40 +281,6 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     }
   };
 
-  const startEdit = () => {
-    const f: Record<string, string> = {};
-    for (const sec of editSections) {
-      for (const fld of sec.fields) {
-        if (fld.type === "bool") continue;
-        f[fld.k as string] = toStr(po[fld.k]);
-      }
-    }
-    f.notes = toStr(po.notes);
-    const loc = matchStockingLocation(stockingLocations, f.stockingLocation ?? "");
-    let portChanged = false;
-    if (loc) {
-      f.stockingLocation = loc.name;
-      if (loc.arrivalPort && f.portOfDest !== loc.arrivalPort) {
-        f.portOfDest = loc.arrivalPort;
-        portChanged = true;
-      }
-    }
-    setForm(applyPortCharges(f, portChanged));
-    setActive(po.active);
-    setLines(
-      po.lines.map((l) => {
-        const row: LineForm = {};
-        if (l.id != null) row.id = String(l.id);
-        for (const c of LINE_COLS) row[c.k as string] = toStr(l[c.k]);
-        // Not editable — carried through the edit so the price comparison survives a save.
-        row.custUnitMsf = toStr(l.custUnitMsf);
-        row.custExtPo = toStr(l.custExtPo);
-        return row;
-      }),
-    );
-    setEditing(true);
-  };
-
   const save = async () => {
     setSaving(true);
     try {
@@ -439,19 +357,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
     return <span className={`stage-pill ${cls}`}>{label}</span>;
   };
 
-  const showActuals = !!po.productionComplete || po.lines.some(lineHasActuals);
-  const showLineNotes = po.lines.some((l) => l.actualNotes?.trim());
-  // Cynergy orders are quoted per sheet, UFP per MSF.
-  const sheetBasis = company === "SYNERGY";
   const editLineCols = lineColsFor(company);
-  const lineExtPoTotal = sumLineExtPo(po.lines);
-  const lineExtInvTotal = sumLineExtInv(po.lines);
-  // Lines are priced from our table; what the customer PO asked for is shown for comparison.
-  const priceAlerts = linePriceMismatches(po.lines);
-  const totalAlert = poTotalMismatch(po);
-  const showCustPrices = po.lines.some((l) => l.custExtPo != null || l.custUnitMsf != null);
-  const trailingLineCols =
-    (showCustPrices ? 1 : 0) + (showActuals ? 3 : 0) + (showLineNotes ? 1 : 0);
 
   return (
     <>
@@ -479,15 +385,6 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
               {editing && <p className="text-sm text-indigo-600 mt-1 font-medium">Editing all fields</p>}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              {canEdit && !editing && (
-                <button
-                  type="button"
-                  onClick={startEdit}
-                  className="px-3 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 font-medium"
-                >
-                  Edit
-                </button>
-              )}
               {canEdit && !editing && po.status !== "PO Revised" && (
                 <button
                   type="button"
@@ -505,7 +402,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   onClick={() => void handleDelete()}
                   className="px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded-md hover:bg-red-50 font-medium disabled:opacity-50"
                 >
-                  {deleting ? "Deleting…" : "Delete"}
+                  <BusyLabel busy={deleting} className="h-3 w-12">Delete</BusyLabel>
                 </button>
               )}
               <button
@@ -529,6 +426,9 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   onClick={() => setTab(t.id)}
                 >
                   {t.label}
+                  {t.id === "documents" && documentCount > 0 ? (
+                    <span className="po-drawer-tab-count">{documentCount}</span>
+                  ) : null}
                   {t.id === "history" && po.history.length > 0 ? (
                     <span className="po-drawer-tab-count">{po.history.length}</span>
                   ) : null}
@@ -767,227 +667,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
               </div>
             ) : null}
 
-            {tab === "summary" && (
-              <>
-                <PipelineProgress company={company} status={po.status} po={po} compact omitGroupIds={["planning"]} />
-                {payBannerTone && (
-                  <div className={`po-drawer-pay-banner pay-${payBannerTone}`}>
-                    {dpPayFlag && dpPayFlag.kind !== "ok" && (
-                      <div>
-                        Downpayment {dpPayFlag.label.toLowerCase()} · expected{" "}
-                        {fmtMoney(dpPayFlag.expected)} · variance {fmtMoney(dpPayFlag.variance)}
-                      </div>
-                    )}
-                    {bpPayFlag && bpPayFlag.kind !== "ok" && (
-                      <div>
-                        Balance payment {bpPayFlag.label.toLowerCase()} · expected{" "}
-                        {fmtMoney(bpPayFlag.expected)} · variance {fmtMoney(bpPayFlag.variance)}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {(priceAlerts.length > 0 || totalAlert) && (
-                  <div className="po-drawer-pay-banner price-off">
-                    <div>Customer PO is priced differently to our price list.</div>
-                    {totalAlert && (
-                      <div>
-                        PO total {fmtMoney(totalAlert.poTotal)} vs ours{" "}
-                        {fmtMoney(totalAlert.ourTotal)} · difference{" "}
-                        {fmtMoney(totalAlert.variance)}
-                      </div>
-                    )}
-                    {priceAlerts.map((m) => (
-                      <div key={m.lineNo ?? m.partNo}>{describeMismatch(m)}</div>
-                    ))}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="po-drawer-link-btn"
-                  onClick={() => setTab("progress")}
-                >
-                  View full timeline →
-                </button>
-
-                <div className="px-5 pb-2">
-                  <div className="po-drawer-summary-grid">
-                    <Field label="PO date" val={po.poDate ? fmtDate(po.poDate) : null} />
-                    <Field
-                      label="Priority"
-                      val={
-                        <span className={po.priority === "High" ? "text-amber-800 font-semibold" : undefined}>
-                          {po.priority || "Standard"}
-                        </span>
-                      }
-                    />
-                    <Field label="PO value (sq ft)" val={fmtMoney(po.poValue)} />
-                    {po.custPoTotal != null && (
-                      <Field
-                        label="PO asked (as printed)"
-                        val={
-                          <span className={totalAlert ? "text-red-700 font-semibold" : undefined}>
-                            {fmtMoney(po.custPoTotal)}
-                          </span>
-                        }
-                      />
-                    )}
-                    <Field label="Gross invoice (m²)" val={fmtMoney(resolveGrossInvoiceValue(po))} />
-                    <Field label="Total M²" val={fmtNum(po.totalM2, 2)} />
-                    <Field label="Skids" val={po.skids} />
-                    <Field label="Active" val={po.active ? "Yes" : "No"} />
-                  </div>
-                </div>
-
-                <div className="px-5 pb-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-sm font-semibold text-slate-800">
-                      Line items
-                      <span className="ml-1.5 text-slate-400 font-normal">{po.lines.length}</span>
-                    </div>
-                  </div>
-                  <div className="border border-slate-200 rounded-lg overflow-x-auto">
-                    <table className="tbl w-full min-w-[980px]">
-                      <thead>
-                        <tr>
-                          <th className="w-8">#</th>
-                          <th>Part #</th>
-                          <th>Size</th>
-                          <th>Size (mm)</th>
-                          <th>Color</th>
-                          {!sheetBasis && <th className="text-right">Qty MSF</th>}
-                          <th className="text-right">Qty m²</th>
-                          <th className="text-right">Sheets</th>
-                          <th className="text-right">Skids</th>
-                          <th className="text-right">{sheetBasis ? "Unit /sheet" : "Unit MSF"}</th>
-                          <th className="text-right">Unit m²</th>
-                          <th className="text-right">Ext PO $</th>
-                          <th className="text-right">Ext Inv $</th>
-                          {showCustPrices && <th className="text-right">PO asked $</th>}
-                          {showActuals && (
-                            <>
-                              <th className="text-right">Actual sheets</th>
-                              <th className="text-right">Actual M²</th>
-                              <th className="text-right">Actual skids</th>
-                            </>
-                          )}
-                          {showLineNotes && <th>Line notes</th>}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {po.lines.map((l) => {
-                          const lineNote = l.actualNotes?.trim();
-                          const lineInv =
-                            l.extInv != null && !Number.isNaN(Number(l.extInv))
-                              ? Number(l.extInv)
-                              : l.qtyM2 != null && l.unitM2 != null
-                                ? Number(l.qtyM2) * Number(l.unitM2)
-                                : null;
-                          const mismatch = linePriceMismatch(l);
-                          return (
-                            <tr key={l.lineNo} className={mismatch ? "price-off" : undefined}>
-                              <td>{l.lineNo}</td>
-                              <td className="font-mono truncate" title={l.partNo ?? undefined}>{l.partNo}</td>
-                              <td className="truncate" title={l.size ?? undefined}>{l.size}</td>
-                              <td
-                                className="truncate tabular-nums"
-                                title={fmtSizeMm(l.widthMm, l.lengthMm) || undefined}
-                              >
-                                {fmtSizeMm(l.widthMm, l.lengthMm) || <span className="text-slate-300">—</span>}
-                              </td>
-                              <td className="truncate" title={l.color ?? undefined}>{l.color}</td>
-                              {!sheetBasis && <td className="text-right">{fmtNum(l.qtyMsf, 3)}</td>}
-                              <td className="text-right">{fmtNum(l.qtyM2, 2)}</td>
-                              <td className="text-right">{fmtNum(l.sheets, 0)}</td>
-                              <td className="text-right">{fmtNum(l.skids, 0)}</td>
-                              <td className="text-right">{fmtMoney(sheetBasis ? l.unitSheet : l.unitMsf)}</td>
-                              <td className="text-right">{fmtMoney(l.unitM2)}</td>
-                              <td className="text-right">{fmtMoney(l.extPo)}</td>
-                              <td className="text-right">{fmtMoney(lineInv)}</td>
-                              {showCustPrices && (
-                                <td
-                                  className={`text-right ${mismatch ? "text-red-700 font-semibold" : "text-slate-500"}`}
-                                  title={mismatch ? describeMismatch(mismatch) : undefined}
-                                >
-                                  {l.custExtPo != null ? (
-                                    fmtMoney(l.custExtPo)
-                                  ) : (
-                                    <span className="text-slate-300">—</span>
-                                  )}
-                                </td>
-                              )}
-                              {showActuals && (
-                                <>
-                                  <td className="text-right">
-                                    <ActualQtyCell actual={l.actualSheets} ordered={l.sheets} decimals={0} />
-                                  </td>
-                                  <td className="text-right">
-                                    <ActualQtyCell actual={l.actualQtyM2} ordered={l.qtyM2} decimals={2} />
-                                  </td>
-                                  <td className="text-right">
-                                    {l.actualSkids != null ? (
-                                      <span className="inline-block px-1.5 py-0.5 rounded bg-slate-50 border border-slate-200">
-                                        {fmtNum(l.actualSkids, 0)}
-                                      </span>
-                                    ) : (
-                                      <span className="text-slate-300">—</span>
-                                    )}
-                                  </td>
-                                </>
-                              )}
-                              {showLineNotes && (
-                                <td className="text-slate-600">
-                                  {lineNote ? (
-                                    <span
-                                      className="block line-clamp-2 break-all text-[11px] leading-snug"
-                                      title={lineNote}
-                                    >
-                                      {lineNote}
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-300">—</span>
-                                  )}
-                                </td>
-                              )}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="bg-slate-50 font-semibold text-slate-700">
-                          <td colSpan={sheetBasis ? 9 : 10} className="text-right">
-                            Totals
-                          </td>
-                          <td className="text-right">{fmtMoney(lineExtPoTotal)}</td>
-                          <td className="text-right">{fmtMoney(lineExtInvTotal)}</td>
-                          {trailingLineCols > 0 && <td colSpan={trailingLineCols} />}
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-
-                <StockingEmailQueue
-                  po={po}
-                  user={user}
-                  locations={stockingLocations}
-                  onUpdated={onUpdated}
-                />
-                <PiEmailQueue po={po} user={user} master={master} onUpdated={onUpdated} />
-              </>
-            )}
-
-            {tab === "progress" && (
-              <div className="pt-2 pb-4">
-                <PipelineProgress
-                  company={company}
-                  status={po.status}
-                  po={po}
-                  canEditStages={canEdit}
-                  onSelectStage={(stageId) => setEditStageId(stageId)}
-                  omitGroupIds={["planning"]}
-                />
-              </div>
-            )}
+            {tab === "documents" && <OrderDocuments po={po} />}
 
             {tab === "details" && (
               <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -997,11 +677,6 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                   <Field label="PI value" val={fmtMoney(po.piValue)} />
                   <Field label="PI approved" val={po.piApprovedDate ? fmtDate(po.piApprovedDate) : null} />
                   <Field label="PI sent" val={po.piSent ? fmtDate(po.piSent) : null} />
-                  {po.piNo && (
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      <PiPdfPreview poId={po.id} piNo={po.piNo} poNo={po.poNo} company={po.company} />
-                    </div>
-                  )}
                 </Section>
                 <Section
                   title="Down payment"
@@ -1048,11 +723,6 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                       ) : null
                     }
                   />
-                  {po.ciNo && (
-                    <div className="col-span-2 sm:col-span-4 mt-1">
-                      <CiExcelDownload poId={po.id} ciNo={po.ciNo} company={po.company} />
-                    </div>
-                  )}
                 </Section>
                 <Section
                   title="Balance payment"
@@ -1129,7 +799,7 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
                 onClick={save}
                 className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-50"
               >
-                {saving ? "Saving…" : "Save changes"}
+                <BusyLabel busy={saving}>Save changes</BusyLabel>
               </button>
             </div>
           ) : (
@@ -1607,9 +1277,9 @@ function AdvanceButton({
           isApproval ? "bg-green-600 hover:bg-green-700" : "bg-indigo-600 hover:bg-indigo-700"
         }`}
       >
-        {loading
-          ? "Preparing…"
-          : approvePi
+        {loading ? (
+          <BusyLabel busy className="h-3 w-20">Preparing</BusyLabel>
+        ) : approvePi
             ? "Approve PI"
             : approveCi
               ? "Approve CI"
@@ -1758,7 +1428,7 @@ function AdvanceButton({
               isApproval ? "bg-green-600" : "bg-indigo-600"
             }`}
           >
-            {saving ? "Saving…" : approvePi ? "Approve PI" : approveCi ? "Approve CI" : "Save & advance"}
+            <BusyLabel busy={saving}>{approvePi ? "Approve PI" : approveCi ? "Approve CI" : "Save & advance"}</BusyLabel>
           </button>
         </div>
       </div>
@@ -1840,7 +1510,7 @@ function RejectPiButton({
             onClick={() => void submit()}
             className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-md disabled:opacity-50"
           >
-            {saving ? "Submitting…" : "Submit rejection"}
+            <BusyLabel busy={saving} className="h-3 w-28">Submit rejection</BusyLabel>
           </button>
         </div>
       </div>
@@ -1919,7 +1589,7 @@ function ResubmitPiButton({
             onClick={() => void submit()}
             className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md disabled:opacity-50"
           >
-            {saving ? "Submitting…" : "Resubmit for approval"}
+            <BusyLabel busy={saving} className="h-3 w-36">Resubmit for approval</BusyLabel>
           </button>
         </div>
       </div>
@@ -2001,7 +1671,7 @@ function RejectCiButton({
             onClick={() => void submit()}
             className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-md disabled:opacity-50"
           >
-            {saving ? "Submitting…" : "Submit rejection"}
+            <BusyLabel busy={saving} className="h-3 w-28">Submit rejection</BusyLabel>
           </button>
         </div>
       </div>
@@ -2080,12 +1750,115 @@ function ResubmitCiButton({
             onClick={() => void submit()}
             className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md disabled:opacity-50"
           >
-            {saving ? "Submitting…" : "Resubmit for approval"}
+            <BusyLabel busy={saving} className="h-3 w-36">Resubmit for approval</BusyLabel>
           </button>
         </div>
       </div>
     </div>
     </ModalPortal>
+  );
+}
+
+function OrderDocuments({ po }: { po: PurchaseOrder }) {
+  const files = [
+    po.piNo?.trim()
+      ? {
+          key: "pi" as const,
+          title: "Proforma invoice",
+          meta: po.piNo,
+          file: piFileName(po.piNo, po.poNo) ?? "PI.pdf",
+        }
+      : null,
+    po.ciNo?.trim()
+      ? {
+          key: "ci" as const,
+          title: "Commercial invoice",
+          meta: po.ciNo,
+          file: ciFileName(po.ciNo) ?? "CI.xlsx",
+        }
+      : null,
+  ].filter((file): file is { key: "pi" | "ci"; title: string; meta: string; file: string } => file != null);
+
+  if (files.length === 0) {
+    return (
+      <div className="px-5 py-10 text-center text-sm text-slate-500">
+        No documents have been generated for this order yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-5 py-4 space-y-2">
+      {files.map((file) => (
+        <div
+          key={file.key}
+          className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-slate-800">{file.title}</div>
+            <div className="text-xs text-slate-500 truncate">{file.meta}</div>
+            <div className="text-xs text-slate-400 truncate">{file.file}</div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {file.key === "pi" ? (
+              <>
+                <PiPdfPreview
+                  poId={po.id}
+                  piNo={po.piNo}
+                  poNo={po.poNo}
+                  company={po.company}
+                  label="Preview"
+                />
+                <PiPdfDownload poId={po.id} piNo={po.piNo} poNo={po.poNo} company={po.company} />
+              </>
+            ) : (
+              <CiExcelDownload poId={po.id} ciNo={po.ciNo} company={po.company} />
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PiPdfDownload({
+  poId,
+  piNo,
+  poNo,
+  company,
+}: {
+  poId: number;
+  piNo?: string | null;
+  poNo?: string | null;
+  company?: PurchaseOrder["company"];
+}) {
+  const [loading, setLoading] = useState(false);
+
+  const download = async () => {
+    setLoading(true);
+    try {
+      const result = await api.fetchPiPdf(poId, { piNo, poNo }, company);
+      const a = document.createElement("a");
+      a.href = result.url;
+      a.download = result.filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(result.url), 1000);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to download PI PDF");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      disabled={loading}
+      onClick={() => void download()}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-800 bg-sky-50 border border-sky-200 rounded-md hover:bg-sky-100 disabled:opacity-50"
+    >
+      <BusyLabel busy={loading} className="h-3 w-24">Download</BusyLabel>
+    </button>
   );
 }
 
@@ -2110,7 +1883,7 @@ function CiExcelDownload({ poId, ciNo, company }: { poId: number; ciNo?: string 
       onClick={() => void download()}
       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 disabled:opacity-50"
     >
-      {loading ? "Preparing…" : "Download CI Excel"}
+      <BusyLabel busy={loading} className="h-3 w-20">Download</BusyLabel>
     </button>
   );
 }

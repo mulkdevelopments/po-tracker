@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   Menu,
   ClipboardPen,
+  Settings,
 } from "lucide-react";
 
 export const NAV_ICONS: Record<string, LucideIcon> = {
@@ -23,6 +24,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   pricing: Tag,
   master: Database,
   users: Users,
+  settings: Settings,
   more: MoreHorizontal,
   menu: Menu,
 };

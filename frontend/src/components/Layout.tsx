@@ -1,53 +1,98 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Bell, Plus } from "lucide-react";
 import { useAuth } from "../AuthContext";
 import { useCompany, COMPANIES } from "../CompanyContext";
 import { api } from "../api";
-import { downloadBlob } from "../utils";
-import type { Company } from "../companies";
+import { downloadBlob, todayISO } from "../utils";
+import type { DashboardScope } from "../CompanyContext";
 import { NavIcon } from "./NavIcons";
 import { usePendingPiApprovals } from "../hooks/usePendingPiApprovals";
 import { usePendingCiApprovals } from "../hooks/usePendingCiApprovals";
+import { usePendingStockingEmails } from "../hooks/usePendingStockingEmails";
+import { usePendingPiDue } from "../hooks/usePendingPiDue";
 import { seesPiApprovals, seesCiApprovals } from "../piApproval";
-import PiApprovalNotice from "./PiApprovalNotice";
-import CiApprovalNotice from "./CiApprovalNotice";
-
-const NAV = [
-  { to: "/dashboard", label: "Dashboard", shortLabel: "Dashboard", page: "dashboard" },
-  { to: "/orders", label: "Order Summary", shortLabel: "Orders", page: "orders" },
-  { to: "/cynergy-forms", label: "Cynergy Forms", shortLabel: "Cynergy", page: "cynergy-forms" },
-  { to: "/production", label: "Production Schedule", shortLabel: "Production", page: "production" },
-  { to: "/upload", label: "Upload PO", shortLabel: "Upload", page: "upload" },
-  { to: "/items", label: "Item Summary", shortLabel: "Items", page: "items" },
-  { to: "/pricing", label: "Pricing Table", shortLabel: "Pricing", page: "pricing" },
-  { to: "/master", label: "Master Data", shortLabel: "Master", page: "master" },
-  { to: "/users", label: "Users", shortLabel: "Users", page: "users" },
-];
-
-function navLinkClass(isActive: boolean) {
-  return `sidebar-link ${isActive ? "sidebar-link-active" : ""}`;
-}
+import { canMarkStockingEmailRole } from "../stockingEmail";
+import { canMarkPiEmailRole } from "../piEmail";
+import { isPiSendCalendarDay } from "../piDue";
+import NotificationsDialog, { type NotificationSection } from "./NotificationsDialog";
+import { NAV } from "../nav";
 
 export default function Layout() {
   const { user, logout, canPage } = useAuth();
-  const { company, setCompany, config } = useCompany();
+  const { company, scope, setScope, year, setYear, years } = useCompany();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [orderQuery, setOrderQuery] = useState("");
+  const [orderStats, setOrderStats] = useState<{ shown: number; total: number; canClear: boolean } | null>(null);
+  const clearOrdersRef = useRef<(() => void) | null>(null);
   const location = useLocation();
+  const onOrders = location.pathname.startsWith("/orders");
 
   const navItems = NAV.filter((n) => canPage(n.page) && !(company === "UFP" && n.page === "cynergy-forms"));
-  const currentPage = navItems.find((n) => location.pathname.startsWith(n.to));
-  const moreNavItems = navItems.slice(4);
-  const isMoreActive = moreNavItems.some((n) => location.pathname.startsWith(n.to));
-  const isManager = seesPiApprovals(user);
-  const isFinance = seesCiApprovals(user);
-  const { pending: pendingPi, count: pendingPiCount } = usePendingPiApprovals(isManager);
-  const { pending: pendingCi, count: pendingCiCount } = usePendingCiApprovals(isFinance);
-  const pendingApprovalCount = pendingPiCount + pendingCiCount;
-
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [location.pathname]);
+  const mainItems = navItems.filter((n) => n.slot === "main");
+  const ordersAt = mainItems.findIndex((n) => n.page === "orders");
+  const tabsBeforePlus = ordersAt === -1 ? mainItems : mainItems.slice(0, ordersAt);
+  const tabsAfterPlus = ordersAt === -1 ? [] : mainItems.slice(ordersAt);
+  const createItem = navItems.find((n) => n.slot === "create");
+  const settingsItems = navItems.filter((n) => n.slot === "settings");
+  const onSettings =
+    location.pathname.startsWith("/settings") ||
+    settingsItems.some((n) => location.pathname.startsWith(n.to));
+  const currentPage = location.pathname.startsWith("/settings")
+    ? { label: "Settings" }
+    : navItems.find((n) => location.pathname.startsWith(n.to));
+  const showPiApprovals = seesPiApprovals(user);
+  const showCiApprovals = seesCiApprovals(user);
+  const showStockingEmails = canMarkStockingEmailRole(user?.role);
+  const showPiDue = canMarkPiEmailRole(user?.role);
+  const { pending: pendingPi } = usePendingPiApprovals(showPiApprovals);
+  const { pending: pendingCi } = usePendingCiApprovals(showCiApprovals);
+  const { pending: pendingStockingEmail } = usePendingStockingEmails(showStockingEmails);
+  const { pending: pendingPiDueOrders } = usePendingPiDue(showPiDue);
+  const piSendDay = isPiSendCalendarDay(todayISO());
+  const notificationSections: NotificationSection[] = [
+    showPiApprovals && pendingPi.length > 0
+      ? {
+          id: "pendingPi" as const,
+          title: "PI approval needed",
+          detail: "Proforma invoices waiting for approval.",
+          orders: pendingPi,
+          accent: "bg-amber-500",
+        }
+      : null,
+    showCiApprovals && pendingCi.length > 0
+      ? {
+          id: "pendingCi" as const,
+          title: "CI approval needed",
+          detail: "Commercial invoices waiting for approval.",
+          orders: pendingCi,
+          accent: "bg-cyan-500",
+        }
+      : null,
+    showPiDue && pendingPiDueOrders.length > 0
+      ? {
+          id: "pendingPiDue" as const,
+          title: piSendDay ? "PI due — send day" : "PI due",
+          detail: piSendDay
+            ? "Send day (1st / 15th). Due 14 weeks before planned production."
+            : "Due 14 weeks before planned production.",
+          orders: pendingPiDueOrders,
+          accent: piSendDay ? "bg-amber-500" : "bg-sky-500",
+        }
+      : null,
+    showStockingEmails && pendingStockingEmail.length > 0
+      ? {
+          id: "pendingStockingEmail" as const,
+          title: "Stocking location emails pending",
+          detail: "Shipping details not yet emailed to the stocking location contact.",
+          orders: pendingStockingEmail,
+          accent: "bg-violet-500",
+        }
+      : null,
+  ].filter((section): section is NotificationSection => section !== null);
+  const notificationCount = notificationSections.reduce((sum, section) => sum + section.orders.length, 0);
+  const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -85,97 +130,45 @@ export default function Layout() {
     setMenuOpen(false);
   };
 
-  const sidebar = (
-    <aside
-      className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}
-      aria-label="Main navigation"
-    >
-      <div className="sidebar-brand">
-        <span className="sidebar-title">Alubond Tracker</span>
-        <button
-          type="button"
-          className="lg:hidden text-sm text-slate-500 hover:text-slate-800 px-2 py-1"
-          onClick={() => setSidebarOpen(false)}
-          aria-label="Close menu"
-        >
-          Close
-        </button>
-      </div>
-
-      <div className="px-4 py-3 border-b border-slate-200/80">
-        <label className="text-xs font-medium text-slate-500 mb-1.5 block tracking-wide">
-          Company
-        </label>
-        <select
-          value={company}
-          onChange={(e) => setCompany(e.target.value as Company)}
-          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400"
-          aria-label="Select company"
-        >
-          {COMPANIES.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <nav className="sidebar-nav">
-        {navItems.map((n) => (
-          <NavLink key={n.to} to={n.to} className={({ isActive }) => navLinkClass(isActive)}>
-            {({ isActive }) => (
-              <>
-                <NavIcon page={n.page} active={isActive} />
-                <span className="flex-1">{n.label}</span>
-                {(isManager || isFinance) && n.page === "orders" && pendingApprovalCount > 0 && (
-                  <span className="ml-auto min-w-[1.25rem] rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white text-center leading-none">
-                    {pendingApprovalCount}
-                  </span>
-                )}
-              </>
-            )}
-          </NavLink>
-        ))}
-      </nav>
-    </aside>
-  );
-
   return (
     <div className="app-shell">
-      {sidebarOpen && (
-        <button
-          type="button"
-          className="sidebar-backdrop lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-          aria-label="Close menu overlay"
-        />
-      )}
-
-      {sidebar}
-
       <div className="app-main">
         <header className="app-header">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              className="lg:hidden mobile-menu-btn"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open menu"
-            >
-              <NavIcon page="menu" size={20} className="mobile-tab-icon" />
-              <span>Menu</span>
-            </button>
-            <div className="min-w-0">
-              <h1 className="page-title truncate">{currentPage?.label ?? "Dashboard"}</h1>
-              <p className="page-subtitle hidden sm:block truncate">{config.tagline}</p>
-            </div>
+          <div className="min-w-0">
+            <h1 className="page-title truncate">{currentPage?.label ?? "Dashboard"}</h1>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          {onOrders && (
+            <>
+              <input
+                placeholder="Search all columns…"
+                value={orderQuery}
+                onChange={(e) => setOrderQuery(e.target.value)}
+                aria-label="Search orders"
+                className="order-search"
+              />
+              {orderStats && (
+                <span className="text-sm text-slate-500 tabular-nums shrink-0">
+                  {orderStats.shown}/{orderStats.total}
+                </span>
+              )}
+              {orderStats?.canClear && (
+                <button
+                  type="button"
+                  onClick={() => clearOrdersRef.current?.()}
+                  className="text-sm text-slate-600 hover:text-slate-900 shrink-0"
+                >
+                  Clear
+                </button>
+              )}
+            </>
+          )}
+
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <select
-              value={company}
-              onChange={(e) => setCompany(e.target.value as Company)}
-              className="md:hidden text-sm border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white text-slate-800 max-w-[7rem]"
+              value={scope}
+              onChange={(e) => setScope(e.target.value as DashboardScope)}
+              className="text-sm border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white text-slate-800 max-w-[7.5rem] sm:max-w-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400"
               aria-label="Select company"
             >
               {COMPANIES.map((c) => (
@@ -183,7 +176,58 @@ export default function Layout() {
                   {c.label}
                 </option>
               ))}
+              <option value="BOTH">Both</option>
             </select>
+            <select
+              id="dashboard-year"
+              value={year}
+              onChange={(e) => setYear(Number(e.target.value))}
+              className="text-sm border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400"
+              aria-label="Year"
+            >
+              {(years.includes(year) ? years : [year, ...years]).map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+            {settingsItems.length > 0 && (
+              <NavLink
+                to="/settings"
+                className={() =>
+                  `flex h-9 w-9 items-center justify-center rounded-lg border ${
+                    onSettings
+                      ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                      : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                  }`
+                }
+                aria-label="Settings"
+                title="Settings"
+              >
+                <NavIcon
+                  page="settings"
+                  active={onSettings}
+                  size={18}
+                  className={onSettings ? "text-indigo-700" : "text-slate-700"}
+                />
+              </NavLink>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                setNotificationsOpen(true);
+              }}
+              className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
+              aria-label={notificationCount > 0 ? `${notificationCount} notifications` : "Notifications"}
+            >
+              <Bell size={18} />
+              {notificationCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold leading-none text-white">
+                  {notificationCount > 99 ? "99+" : notificationCount}
+                </span>
+              )}
+            </button>
             <div className="relative">
               <button
                 type="button"
@@ -224,60 +268,64 @@ export default function Layout() {
           </div>
         </header>
 
-        {!sidebarOpen && (
-          <nav className="mobile-tabbar" aria-label="Quick navigation">
-            {navItems.slice(0, 4).map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                className={({ isActive }) => `mobile-tab ${isActive ? "mobile-tab-active" : ""}`}
-              >
-                {({ isActive }) => (
-                  <>
-                    <span className="relative">
-                      <NavIcon
-                        page={n.page}
-                        active={isActive}
-                        size={20}
-                        className="mobile-tab-icon"
-                      />
-                      {(isManager || isFinance) && n.page === "orders" && pendingApprovalCount > 0 && (
-                        <span className="absolute -top-1 -right-1 min-w-[0.875rem] h-3.5 rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white flex items-center justify-center leading-none">
-                          {pendingApprovalCount > 9 ? "9+" : pendingApprovalCount}
-                        </span>
-                      )}
-                    </span>
-                    <span className="mobile-tab-label">{n.shortLabel}</span>
-                  </>
-                )}
-              </NavLink>
-            ))}
-            <button
-              type="button"
-              className={`mobile-tab ${isMoreActive ? "mobile-tab-active" : ""}`}
-              onClick={() => setSidebarOpen(true)}
-              aria-label="More menu"
+        <nav className="mobile-tabbar" aria-label="Main navigation">
+          {tabsBeforePlus.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              className={({ isActive }) => `mobile-tab ${isActive ? "mobile-tab-active" : ""}`}
             >
-              <NavIcon page="more" active={isMoreActive} size={20} className="mobile-tab-icon" />
-              <span className="mobile-tab-label">More</span>
-            </button>
-          </nav>
-        )}
+              {({ isActive }) => (
+                <>
+                  <NavIcon
+                    page={n.page}
+                    active={isActive}
+                    size={20}
+                    className="mobile-tab-icon"
+                  />
+                  <span className="mobile-tab-label">{n.shortLabel}</span>
+                </>
+              )}
+            </NavLink>
+          ))}
+          {createItem && (
+            <NavLink
+              to={createItem.to}
+              className={({ isActive }) => `mobile-tab-plus ${isActive ? "mobile-tab-plus-active" : ""}`}
+              aria-label={createItem.label}
+            >
+              <Plus size={28} strokeWidth={2.5} />
+            </NavLink>
+          )}
+          {tabsAfterPlus.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              className={({ isActive }) => `mobile-tab ${isActive ? "mobile-tab-active" : ""}`}
+            >
+              {({ isActive }) => (
+                <>
+                  <NavIcon
+                    page={n.page}
+                    active={isActive}
+                    size={20}
+                    className="mobile-tab-icon"
+                  />
+                  <span className="mobile-tab-label">{n.shortLabel}</span>
+                </>
+              )}
+            </NavLink>
+          ))}
+        </nav>
 
         <main className="app-content">
-          {((isManager && pendingPiCount > 0) || (isFinance && pendingCiCount > 0)) &&
-          location.pathname !== "/orders" ? (
-            <div className="space-y-3">
-              {isManager && pendingPiCount > 0 && (
-                <PiApprovalNotice pending={pendingPi} />
-              )}
-              {isFinance && pendingCiCount > 0 && (
-                <CiApprovalNotice pending={pendingCi} />
-              )}
-            </div>
-          ) : null}
-          <Outlet key={company} />
+          <Outlet key={company} context={{ orderQuery, setOrderQuery, setOrderStats, clearOrdersRef }} />
         </main>
+        <NotificationsDialog
+          open={notificationsOpen}
+          sections={notificationSections}
+          onClose={closeNotifications}
+        />
       </div>
     </div>
   );

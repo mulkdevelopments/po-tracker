@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../AuthContext";
+import { BusyLabel } from "../components/Skeleton";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -68,9 +69,10 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
+            aria-busy={loading}
             className="w-full py-2.5 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
           >
-            {loading ? "Signing in…" : "Sign in"}
+            <BusyLabel busy={loading}>Sign in</BusyLabel>
           </button>
         </form>
       </div>

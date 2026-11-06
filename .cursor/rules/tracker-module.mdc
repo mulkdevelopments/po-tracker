@@ -15,7 +15,7 @@ Purchase-order / operations tracker — system of record for **factory, producti
 
 ## Ecosystem duties
 
-- Expose `GET /api/ecosystem/summary` for MULK OS (`X-Ecosystem-Key`).
+- Expose `GET /api/ecosystem/summary` for CORE MCP (`X-Ecosystem-Key`).
 - Do not replace CRM as client/project master; link by IDs later.
 - Do not own employees — that is HRMS.
 - Keep JWT auth on normal APIs; ecosystem bridge uses the shared key only.

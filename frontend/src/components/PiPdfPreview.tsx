@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import { api } from "../api";
+import { BusyLabel, PdfSkeleton } from "./Skeleton";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -133,7 +134,7 @@ export default function PiPdfPreview({ poId, piNo, poNo, company, className, lab
           "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 disabled:opacity-50"
         }
       >
-        {open && loading ? "Preparing…" : label}
+        <BusyLabel busy={open && loading} className="h-3 w-16">{label}</BusyLabel>
       </button>
 
       {open &&
@@ -176,8 +177,8 @@ export default function PiPdfPreview({ poId, piNo, poNo, company, className, lab
 
               <div className="flex-1 bg-slate-200 min-h-0 relative overflow-auto">
                 {loading && (
-                  <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-600">
-                    Preparing PDF…
+                  <div className="absolute inset-0 bg-slate-200">
+                    <PdfSkeleton />
                   </div>
                 )}
                 {error && (

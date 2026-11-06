@@ -8,6 +8,7 @@ import type { PurchaseOrder, MasterData } from "../types";
 import { fmtNum, fmtDate, dateSortKey } from "../utils";
 import { resolveGrossInvoiceValue } from "../paymentFlags";
 import { compareProductionOrder, hasNonStandardColors, isOnProductionBoard } from "../productionSchedule";
+import { TableSkeleton } from "../components/Skeleton";
 
 const STATUS_STYLES: Record<string, string> = {
   "UNDER PRODUCTION": "bg-blue-100 text-blue-700",
@@ -263,7 +264,7 @@ export default function ProductionPage() {
     }
   };
 
-  if (loading) return <div className="text-slate-500">Loading production schedule…</div>;
+  if (loading) return <TableSkeleton rows={10} />;
 
   const openColumn = COLUMNS.find((c) => c.key === openCol);
 

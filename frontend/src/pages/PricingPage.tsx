@@ -11,6 +11,7 @@ import type {
   ReferenceData,
 } from "../types";
 import { fmtDim, fmtPrice, fmtDate, todayISO } from "../utils";
+import { BusyLabel, TableSkeleton } from "../components/Skeleton";
 
 type CatalogVals = {
   partNo: string;
@@ -476,7 +477,7 @@ export default function PricingPage() {
     }
   };
 
-  if (loading || !ref) return <div className="text-slate-500">Loading…</div>;
+  if (loading || !ref) return <TableSkeleton rows={10} />;
 
   const tabBtn = (id: Tab, label: string) => (
     <button
@@ -639,7 +640,7 @@ export default function PricingPage() {
 
       {tab === "previous" && (
         <div className="mt-3 bg-white rounded-lg border border-slate-200 overflow-hidden">
-          {pastLoading && <div className="p-4 text-slate-500 text-sm">Loading…</div>}
+          {pastLoading && <div className="p-4"><TableSkeleton rows={6} toolbar={false} /></div>}
           {!pastLoading && pastLists.length === 0 && <div className="p-4 text-sm text-slate-500">No previous price lists yet.</div>}
           {!pastLoading && pastDetail && (
             <>
@@ -964,7 +965,7 @@ export default function PricingPage() {
                   onClick={applyPreview}
                   className="w-full sm:w-auto px-3 py-2 sm:py-1.5 text-sm bg-emerald-600 text-white rounded-md disabled:opacity-50"
                 >
-                  {saving ? "Applying…" : applyMode === "live" ? "Apply as live table" : "Import as previous table"}
+                  <BusyLabel busy={saving} className="h-3 w-32">{applyMode === "live" ? "Apply as live table" : "Import as previous table"}</BusyLabel>
                 </button>
               </div>
             </>

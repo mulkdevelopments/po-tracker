@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { PurchaseOrder, ReferenceData } from "../types";
 import { fmtNum } from "../utils";
 import { computeItems, type ItemRow } from "../reports";
+import { TableSkeleton } from "../components/Skeleton";
 
 function shortLoc(l: string) {
   return l.split(",")[0];
@@ -83,7 +84,7 @@ export default function ItemsPage() {
 
   const report = useMemo(() => (ref ? computeItems(pos, ref) : null), [pos, ref]);
 
-  if (loading || !report) return <div className="text-slate-500">Loading…</div>;
+  if (loading || !report) return <TableSkeleton rows={8} />;
 
   return (
     <div className="space-y-6">

@@ -4,6 +4,7 @@ import { api, canEditPo, type CynergyFormSubmission } from "../api";
 import { fmtDate } from "../utils";
 import { useAuth } from "../AuthContext";
 import { useCompany } from "../CompanyContext";
+import { BusyLabel, Skeleton } from "../components/Skeleton";
 
 type Filter = "PENDING" | "ALL" | "IMPORTED" | "REJECTED";
 
@@ -189,11 +190,9 @@ export default function CynergyFormsPage() {
               onClick={() => void onDeleteSelected()}
               className="rounded-md border border-rose-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
             >
-              {deletingSelected
-                ? "Deleting…"
-                : selectedCount > 0
-                  ? `Delete selected (${selectedCount})`
-                  : "Delete selected"}
+              <BusyLabel busy={deletingSelected} className="h-3 w-16">
+                {selectedCount > 0 ? `Delete selected (${selectedCount})` : "Delete selected"}
+              </BusyLabel>
             </button>
           )}
           <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
@@ -252,11 +251,15 @@ export default function CynergyFormsPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr>
-                  <td colSpan={colSpan} className="px-3 py-8 text-center text-slate-400">
-                    Loading…
-                  </td>
-                </tr>
+                Array.from({ length: 6 }, (_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: colSpan }, (_, c) => (
+                      <td key={c} className="px-3 py-3">
+                        <Skeleton className="h-3.5 w-full max-w-[7rem]" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
               ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={colSpan} className="px-3 py-8 text-center text-slate-400">
@@ -347,7 +350,7 @@ export default function CynergyFormsPage() {
                     onClick={() => void onImport(selected.id)}
                     className="flex-1 rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                   >
-                    {busyId === selected.id ? "Working…" : "Import to tracker"}
+                    <BusyLabel busy={busyId === selected.id} className="h-3 w-28">Import to tracker</BusyLabel>
                   </button>
                   <button
                     type="button"
@@ -366,7 +369,7 @@ export default function CynergyFormsPage() {
                   onClick={() => void onDelete(selected.id)}
                   className="w-full rounded-md border border-rose-200 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                 >
-                  {busyId === selected.id ? "Deleting…" : "Delete form"}
+                  <BusyLabel busy={busyId === selected.id} className="h-3 w-20">Delete form</BusyLabel>
                 </button>
               )}
             </>

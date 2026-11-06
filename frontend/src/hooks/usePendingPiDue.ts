@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "../api";
-import type { PurchaseOrder } from "../types";
+import { useCompany } from "../CompanyContext";
 import { pendingPiDue } from "../piDue";
+import type { PurchaseOrder } from "../types";
 
 export function usePendingPiDue(enabled: boolean) {
+  const { company } = useCompany();
+  const location = useLocation();
   const [pending, setPending] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -13,22 +17,24 @@ export function usePendingPiDue(enabled: boolean) {
       return;
     }
     let cancelled = false;
-    setLoading(true);
-    api
-      .getOrders()
-      .then(({ pos }) => {
-        if (!cancelled) setPending(pendingPiDue(pos));
-      })
-      .catch(() => {
-        if (!cancelled) setPending([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const load = () => {
+      setLoading(true);
+      api
+        .getOrders()
+        .then(({ pos }) => {
+          if (!cancelled) setPending(pendingPiDue(pos));
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    };
+    load();
+    window.addEventListener("po-updated", load);
     return () => {
       cancelled = true;
+      window.removeEventListener("po-updated", load);
     };
-  }, [enabled]);
+  }, [enabled, company, location.pathname]);
 
-  return { pending, count: pending.length, loading, refresh: () => setPending((p) => [...p]) };
+  return { pending, loading, count: pending.length };
 }

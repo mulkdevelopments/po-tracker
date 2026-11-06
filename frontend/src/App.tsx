@@ -4,21 +4,20 @@ import LoginPage from "./pages/LoginPage";
 import Layout from "./components/Layout";
 import DashboardPage from "./pages/DashboardPage";
 import OrdersPage from "./pages/OrdersPage";
-import ProductionPage from "./pages/ProductionPage";
 import UploadPage from "./pages/UploadPage";
 import CynergyFormsPage from "./pages/CynergyFormsPage";
 import ItemsPage from "./pages/ItemsPage";
 import PricingPage from "./pages/PricingPage";
 import MasterPage from "./pages/MasterPage";
 import UsersPage from "./pages/UsersPage";
+import SettingsPage from "./pages/SettingsPage";
+import { AppBootSkeleton } from "./components/Skeleton";
 
 function ProtectedRoute({ children, page }: { children: React.ReactNode; page: string }) {
   const { user, loading, canPage } = useAuth();
   if (loading) {
     return (
-      <div className="min-h-screen grid place-items-center bg-slate-50">
-        <div className="text-slate-500">Loading…</div>
-      </div>
+      <AppBootSkeleton />
     );
   }
   if (!user) return <Navigate to="/login" replace />;
@@ -31,9 +30,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen grid place-items-center bg-slate-50">
-        <div className="text-slate-500">Loading…</div>
-      </div>
+      <AppBootSkeleton />
     );
   }
 
@@ -64,14 +61,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="production"
-          element={
-            <ProtectedRoute page="production">
-              <ProductionPage />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="production" element={<Navigate to="/orders" replace />} />
         <Route
           path="upload"
           element={
@@ -120,6 +110,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

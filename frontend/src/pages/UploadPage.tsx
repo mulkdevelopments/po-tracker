@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import { api } from "../api";
@@ -16,6 +16,8 @@ import { extractSynergyPdfPages } from "../synergyPdf";
 import { fmtMoney, fmtNum, fmtDate, todayISO } from "../utils";
 import MoneyInput from "../components/MoneyInput";
 import FastTip from "../components/FastTip";
+import { BusyLabel } from "../components/Skeleton";
+import UploadedPoPreview, { type UploadedSource } from "../components/UploadedPoPreview";
 import { LINE_RECOMPUTE_KEYS, type LineForm as SharedLineForm } from "../lineMath";
 import {
   computeLineWithCatalog,
@@ -155,6 +157,7 @@ export default function UploadPage() {
   const [lines, setLines] = useState<LineForm[]>([]);
   const [status, setStatus] = useState("");
   const [duplicate, setDuplicate] = useState<DuplicatePo | null>(null);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -163,6 +166,43 @@ export default function UploadPage() {
   const [synergyBatch, setSynergyBatch] = useState<SynergyBatchItem[]>([]);
   const [activeBatchPage, setActiveBatchPage] = useState<number | null>(null);
   const [batchSaving, setBatchSaving] = useState(false);
+  const [source, setSource] = useState<UploadedSource | null>(null);
+  const splitFrameRef = useRef<HTMLDivElement>(null);
+  const splitPctRef = useRef(58);
+  const [splitPct, setSplitPct] = useState(58);
+
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("po-upload-split"));
+    if (Number.isFinite(saved)) {
+      const next = Math.min(72, Math.max(32, saved));
+      splitPctRef.current = next;
+      setSplitPct(next);
+    }
+  }, []);
+
+  const splitDrag = useRef<{ x: number; pct: number; width: number } | null>(null);
+  const clampSplit = (value: number) => Math.min(72, Math.max(32, value));
+
+  const onSplitPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const frame = splitFrameRef.current;
+    if (!frame) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    splitDrag.current = { x: event.clientX, pct: splitPctRef.current, width: frame.clientWidth };
+  };
+
+  const onSplitPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = splitDrag.current;
+    if (!drag || drag.width <= 0) return;
+    const next = clampSplit(drag.pct + ((event.clientX - drag.x) / drag.width) * 100);
+    splitPctRef.current = next;
+    setSplitPct(next);
+  };
+
+  const onSplitPointerUp = () => {
+    if (!splitDrag.current) return;
+    splitDrag.current = null;
+    localStorage.setItem("po-upload-split", String(splitPctRef.current));
+  };
 
   // Restore draft or fresh SI No. when the page (or company) loads.
   useEffect(() => {
@@ -189,6 +229,7 @@ export default function UploadPage() {
     }
     setSynergyBatch([]);
     setActiveBatchPage(null);
+    setSource(null);
 
     Promise.all([api.getReference(), api.getUploadMeta()]).then(([r, meta]) => {
       if (cancelled) return;
@@ -237,6 +278,7 @@ export default function UploadPage() {
     setDuplicate(null);
     setSynergyBatch([]);
     setActiveBatchPage(null);
+    setSource(null);
     const meta = await api.getUploadMeta();
     setForm({
       ...blankForm(),
@@ -244,6 +286,19 @@ export default function UploadPage() {
       poDate: todayISO(),
     });
   };
+
+  useEffect(() => {
+    if (duplicate) setDuplicateOpen(true);
+  }, [duplicate]);
+
+  useEffect(() => {
+    if (!duplicateOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDuplicateOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [duplicateOpen]);
 
   const sheetsPerSkid = ref?.config?.sheetsPerSkid ?? 200;
 
@@ -524,6 +579,13 @@ export default function UploadPage() {
       alert("No POs selected to save (or all are duplicates/already saved).");
       return;
     }
+    if (
+      !confirm(
+        "Verify that every value from the uploaded PDF matches the form.\n\nI confirm the details are correct and these POs can be saved.",
+      )
+    ) {
+      return;
+    }
     setBatchSaving(true);
     try {
       let siNo = Number(form.siNo) || (await api.getUploadMeta()).nextSiNo;
@@ -588,6 +650,12 @@ export default function UploadPage() {
     setStatus(`Reading ${file.name}…`);
     setSynergyBatch([]);
     setActiveBatchPage(null);
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    if (isPdf) {
+      setSource({ name: file.name, kind: "pdf", bytes: await file.arrayBuffer() });
+    } else {
+      setSource({ name: file.name, kind: "text", text: await file.text() });
+    }
     try {
       if (company === "SYNERGY" && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) {
         const { pages, usedOcr } = await extractSynergyPdfPages(file, setStatus);
@@ -625,6 +693,13 @@ export default function UploadPage() {
     }
     if (duplicate) {
       alert(`PO ${duplicate.poNo}${duplicate.rev ? ` (rev ${duplicate.rev})` : ""} already exists. Open it in Order Summary to update it.`);
+      return;
+    }
+    if (
+      !confirm(
+        "Verify that every value from the uploaded PDF matches this form.\n\nI confirm the details are correct and this PO can be saved.",
+      )
+    ) {
       return;
     }
     setSaving(true);
@@ -748,22 +823,10 @@ export default function UploadPage() {
     );
   };
 
-  return (
-    <div className="space-y-6">
+  const uploadAndForm = (
+    <div className="space-y-6 min-w-0">
       <div className="bg-white rounded-lg border border-slate-200 p-5">
-        <div className="font-semibold mb-1">Upload a Purchase Order</div>
-        <div className="text-sm text-slate-500 mb-4">
-          {company === "SYNERGY" ? (
-            <>
-              Drop a Cynergy ORDER FORM PDF (scanned/handwritten). Each page is OCR’d using fixed form zones
-              (date, PO #, description column, quantity column) for better accuracy. Review and save each PO.
-            </>
-          ) : (
-            <>
-              Drop a PO (PDF). Typed PDFs are read directly; scanned/image PDFs are run through OCR. Recognized part numbers are auto-filled from the catalog — SI No., totals, and skids are computed for you. Your work is kept as a draft if you switch pages before saving.
-            </>
-          )}
-        </div>
+        <div className="font-semibold mb-4">Upload a Purchase Order</div>
         {draftRestored && (
           <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 flex flex-wrap items-center gap-2">
             <span>Unsaved upload draft restored — you can continue editing.</span>
@@ -776,33 +839,18 @@ export default function UploadPage() {
             </button>
           </div>
         )}
-        <div className="flex flex-col md:flex-row gap-4">
-          <label className="flex-1 block border-2 border-dashed border-slate-300 rounded-lg p-8 text-center text-slate-500 hover:bg-slate-50 cursor-pointer">
-            <div className="text-3xl mb-2">⬆</div>
-            <div>Drag PO here or click to browse</div>
-            <input type="file" accept="application/pdf,.pdf,.txt" className="hidden" disabled={busy}
-              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
-          </label>
-          <div className="flex-1">
-            <textarea rows={5} value={pasteText} onChange={(e) => setPasteText(e.target.value)}
-              className="w-full border border-slate-300 rounded-md p-2 text-xs font-mono" placeholder="…or paste raw PO text here" />
-            <button type="button" disabled={busy || !pasteText.trim()}
-              onClick={async () => {
-                if (company === "SYNERGY") {
-                  const { pos } = await api.decodeSynergyPages([pasteText]);
-                  if (pos.length === 1) applyGuess(pos[0]);
-                  else await loadSynergyBatch([pasteText], false);
-                } else {
-                  const { guess } = await api.decodeText(pasteText);
-                  applyGuess(guess);
-                }
-              }}
-              className="mt-2 px-3 py-1.5 text-sm rounded-md border border-slate-300 disabled:opacity-50">
-              Decode pasted text
-            </button>
+        <label className={`block border-2 border-dashed border-slate-300 rounded-lg text-center text-slate-500 hover:bg-slate-50 cursor-pointer ${source ? "px-4 py-3 text-sm" : "p-8"}`}>
+          {!source && <div className="text-3xl mb-2">⬆</div>}
+          <div>{source ? `Replace ${source.name}` : "Drag PO here or click to browse"}</div>
+          <input type="file" accept="application/pdf,.pdf,.txt" className="hidden" disabled={busy}
+            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
+        </label>
+        {busy && !duplicate && (
+          <div className="mt-3" role="status" aria-label="Loading">
+            <span className="skeleton inline-block h-3 w-48" />
           </div>
-        </div>
-        {status && !duplicate && <div className="text-xs text-slate-600 mt-3">{status}</div>}
+        )}
+        {status && !busy && !duplicate && <div className="text-xs text-slate-600 mt-3">{status}</div>}
         {synergyBatch.length > 0 && (
           <div className="mt-4 border border-teal-200 rounded-lg overflow-hidden">
             <div className="bg-teal-50 px-3 py-2 flex flex-wrap items-center gap-2 border-b border-teal-200">
@@ -823,7 +871,7 @@ export default function UploadPage() {
                 onClick={() => void saveSelectedBatch()}
                 className="ml-auto text-xs px-3 py-1.5 rounded-md bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50"
               >
-                {batchSaving ? "Saving…" : "Save selected POs"}
+                <BusyLabel busy={batchSaving} className="h-3 w-24">Save selected POs</BusyLabel>
               </button>
             </div>
             <div className="overflow-x-auto max-h-64 overflow-y-auto">
@@ -906,21 +954,37 @@ export default function UploadPage() {
             </div>
           </div>
         )}
-        {duplicate && (
-          <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            <div className="font-medium">This PO already exists in the tracker.</div>
-            <div className="mt-1">
-              PO <span className="font-mono font-semibold">{duplicate.poNo}</span>
-              {duplicate.rev ? <span className="text-amber-800"> rev {duplicate.rev}</span> : null}
-              {duplicate.status ? <span className="text-amber-800"> · {duplicate.status}</span> : null}
-            </div>
-            <div className="mt-2 text-xs text-amber-800">
-              Upload was decoded, but saving is blocked to prevent a duplicate.{" "}
-              <Link to="/orders" className="font-medium underline hover:text-amber-950">
-                Open Order Summary
-              </Link>{" "}
-              to edit the existing PO — or use <span className="font-medium">New revision</span> there if
-              the customer has re-issued it, then re-upload against the new revision number.
+        {duplicate && duplicateOpen && (
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 p-4"
+            onClick={() => setDuplicateOpen(false)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="duplicate-po-title"
+              className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h2 id="duplicate-po-title" className="text-base font-semibold text-slate-900">
+                This PO already exists
+              </h2>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDuplicateOpen(false)}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+                <Link
+                  to="/orders"
+                  state={{ openPoId: duplicate.id }}
+                  className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+                >
+                  Open {duplicate.poNo}
+                </Link>
+              </div>
             </div>
           </div>
         )}
@@ -954,16 +1018,7 @@ export default function UploadPage() {
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 p-5">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="font-semibold">Purchase Order details</div>
-          <div className="ml-auto text-xs text-slate-500 text-right">
-            <div>SI #{form.siNo || "—"}{form.poNo ? ` · ${form.poNo}` : ""}</div>
-            <div>
-              {lines.length} lines · {fmtNum(totals.totalM2, 0)} m² · PO {fmtMoney(Number(form.poValue) || totals.poValue)} · PI{" "}
-              {fmtMoney(totals.piValue)} · Gross {fmtMoney(totals.grossInvoiceValue)} · {totals.skids || 0} skids
-            </div>
-          </div>
-        </div>
+        <div className="font-semibold mb-4">Purchase Order details</div>
 
         {PO_SECTIONS.map((sec, si) => (
           <details key={sec.title} open={si === 0} className="border border-slate-200 rounded-md mb-3">
@@ -1063,9 +1118,50 @@ export default function UploadPage() {
             </button>
           )}
           <button type="button" disabled={saving || batchSaving || !!duplicate} onClick={save} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-50">
-            {duplicate ? "PO already exists" : saving ? "Saving…" : synergyBatch.length ? "Save current PO" : "Save PO to tracker"}
+            {duplicate ? "PO already exists" : <BusyLabel busy={saving} className="h-3 w-28">{synergyBatch.length ? "Save current PO" : "Save PO to tracker"}</BusyLabel>}
           </button>
         </div>
+      </div>
+    </div>
+  );
+
+  if (!source) return uploadAndForm;
+
+  return (
+    <div
+      ref={splitFrameRef}
+      className="upload-split"
+      style={{ ["--split" as string]: `${splitPct}%` }}
+    >
+      <div className="upload-split-form">
+        {uploadAndForm}
+      </div>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuemin={32}
+        aria-valuemax={72}
+        aria-valuenow={Math.round(splitPct)}
+        aria-label="Resize form and uploaded PO"
+        tabIndex={0}
+        onPointerDown={onSplitPointerDown}
+        onPointerMove={onSplitPointerMove}
+        onPointerUp={onSplitPointerUp}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          const next = clampSplit(splitPctRef.current + (event.key === "ArrowRight" ? 2 : -2));
+          splitPctRef.current = next;
+          setSplitPct(next);
+          localStorage.setItem("po-upload-split", String(next));
+        }}
+        className="group absolute top-0 z-10 hidden h-full w-4 -translate-x-1/2 cursor-col-resize touch-none lg:block"
+        style={{ left: `${splitPct}%` }}
+      >
+        <span className="absolute inset-y-2 left-1/2 w-1 -translate-x-1/2 rounded-full bg-slate-300 transition-colors group-hover:bg-indigo-500 group-focus-visible:bg-indigo-500" />
+      </div>
+      <div className="upload-split-po">
+        <UploadedPoPreview source={source} focusPage={activeBatchPage} />
       </div>
     </div>
   );

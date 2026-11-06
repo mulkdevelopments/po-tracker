@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { api } from "../api";
 import type { PurchaseOrder, PoLine } from "../types";
 import { fmtNum, todayISO } from "../utils";
+import { BusyLabel } from "./Skeleton";
 
 export interface LineEdit {
   id?: number;
@@ -207,7 +208,7 @@ export default function ProductionCompleteAdvance({ po, mode, onUpdated, onClose
             onClick={() => void submit()}
             className="px-3 py-1.5 text-sm bg-teal-600 text-white rounded-md disabled:opacity-50"
           >
-            {saving ? "Saving…" : isEdit ? "Save changes" : "Confirm production complete"}
+            <BusyLabel busy={saving} className="h-3 w-36">{isEdit ? "Save changes" : "Confirm production complete"}</BusyLabel>
           </button>
         </div>
       </div>
