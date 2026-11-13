@@ -45,25 +45,25 @@
     {
       "name": "Baltimore",
       "sailingDays": 58,
-      "freight": 8700,
+      "freight": 4500,
       "inland": 1000
     },
     {
       "name": "Oakland",
       "sailingDays": 66,
-      "freight": 8200,
+      "freight": 4500,
       "inland": 1000
     },
     {
       "name": "Houston",
       "sailingDays": 53,
-      "freight": 8000,
+      "freight": 4500,
       "inland": 1000
     },
     {
       "name": "Savannah",
       "sailingDays": 46,
-      "freight": 7800,
+      "freight": 4500,
       "inland": 1000
     }
   ],

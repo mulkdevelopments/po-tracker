@@ -1228,6 +1228,14 @@ button.pipeline-checklist-item {
   overflow: visible;
 }
 
+.excel-grid td.cell-range {
+  background: #e0e7ff !important;
+}
+
+.excel-grid td.cell-range.cell-active {
+  background: #c7d2fe !important;
+}
+
 .excel-grid td.cell-dirty {
   background: #fffbeb !important;
 }

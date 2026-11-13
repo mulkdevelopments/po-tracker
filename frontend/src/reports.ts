@@ -138,12 +138,17 @@ export function computeDashboard(
     const counts = countBy((o) => orderStatusGroup(o, company) === stage);
     return { stage, counts, total: counts.reduce((a, b) => a + b, 0) };
   });
-  const arrivedCounts = countBy((o) => has(o.arrivalDate));
+  // Telex / Seaway Released and Arrived share this KPI — one order counts once.
+  const arrivedPred = (o: PurchaseOrder) =>
+    has(o.arrivalDate) ||
+    has(o.telexDate) ||
+    o.status === "Arrived" ||
+    o.status === "Telex / Seaway Released";
+  const arrivedCounts = countBy(arrivedPred);
   const totalsCounts = locations.map((loc) => active.filter((o) => o.stockingLocation === loc).length);
 
   const openPred = (o: PurchaseOrder) => !isShipped(o);
   const shippedPred = (o: PurchaseOrder) => isShipped(o);
-  const arrivedPred = (o: PurchaseOrder) => has(o.arrivalDate);
   const summaryRows = [
     { label: "Open Orders", counts: countBy(openPred), total: active.filter(openPred).length },
     { label: "Shipped", counts: countBy(shippedPred), total: active.filter(shippedPred).length },

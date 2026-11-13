@@ -85,6 +85,27 @@ async function docNoTaken(
   return found;
 }
 
+function blankDocNo(value: unknown) {
+  return value == null || String(value).trim() === "" || String(value).trim() === "N/A";
+}
+
+/** A PI is filed under its number. Approving without one still issues the next number. */
+async function assignPiNoWhenApproved(
+  company: ReturnType<typeof parseCompany>,
+  existing: { id: number; piNo?: string | null; status?: string | null },
+  data: Record<string, unknown>,
+) {
+  const status = data.status !== undefined ? data.status : existing.status;
+  if (status !== "PI Approved") return;
+  const piNo = data.piNo !== undefined ? data.piNo : existing.piNo;
+  if (!blankDocNo(piNo)) return;
+  const rows = await prisma.purchaseOrder.findMany({
+    where: { company, id: { not: existing.id } },
+    select: { piNo: true },
+  });
+  data.piNo = nextPiNo(rows.map((r) => r.piNo));
+}
+
 // Accept "" as null and coerce numeric strings, so the edit form can post freely.
 const numField = z.preprocess(
   (v) => (v === "" || v === null || v === undefined ? null : typeof v === "string" ? Number(v) : v),
@@ -824,6 +845,7 @@ router.patch("/:id", requireAuth, requirePage("orders"), requirePoEdit, async (r
       headerData.productionStatus = progress.productionStatus;
     }
   }
+  await assignPiNoWhenApproved(company, existing, headerData);
   await prisma.$transaction(async (tx) => {
     await tx.purchaseOrder.update({ where: { id }, data: poUpdateData(headerData) });
     if (lines) {
@@ -1084,6 +1106,7 @@ router.post("/:id/advance", requireAuth, requirePage("orders"), requireStageAdva
   );
   const merged = { ...po, ...fieldParsed.data };
   updateData.status = deriveStatusFromFields(merged, company);
+  await assignPiNoWhenApproved(company, po, updateData);
 
   if (nextStage === "Production Complete") {
     if (!updateData.productionComplete) updateData.productionComplete = todayISO();

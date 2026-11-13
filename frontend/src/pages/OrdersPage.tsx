@@ -99,6 +99,15 @@ function flagOn(value: unknown) {
   return value != null && String(value).trim() !== "";
 }
 
+function numericFromCell(col: Col, raw: unknown, draft?: string): number | null {
+  if (!NUMERIC_TYPES.includes(col.type)) return null;
+  const src = draft !== undefined ? draft : raw;
+  if (src == null || src === "") return null;
+  const n = typeof src === "number" ? src : Number(String(src).replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+
 function FlagSwitch({
   on,
   disabled,
@@ -150,6 +159,24 @@ function displayValue(col: Col, raw: unknown): string {
 }
 
 type CellAddr = { id: number; key: string };
+
+function selectionBounds(
+  list: PurchaseOrder[],
+  a: CellAddr,
+  b: CellAddr,
+): { rMin: number; rMax: number; cMin: number; cMax: number } | null {
+  const r1 = list.findIndex((row) => row.id === a.id);
+  const r2 = list.findIndex((row) => row.id === b.id);
+  const c1 = COLUMNS.findIndex((c) => (c.key as string) === a.key);
+  const c2 = COLUMNS.findIndex((c) => (c.key as string) === b.key);
+  if (r1 < 0 || r2 < 0 || c1 < 0 || c2 < 0) return null;
+  return {
+    rMin: Math.min(r1, r2),
+    rMax: Math.max(r1, r2),
+    cMin: Math.min(c1, c2),
+    cMax: Math.max(c1, c2),
+  };
+}
 
 function draftBaseline(col: Col, raw: unknown): string {
   if (col.type === "bool") return raw ? "Yes" : "No";
@@ -251,6 +278,8 @@ export default function OrdersPage() {
   const gridWrapRef = useRef<HTMLDivElement>(null);
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
   const [activeCell, setActiveCell] = useState<CellAddr | null>(null);
+  const [rangeEnd, setRangeEnd] = useState<CellAddr | null>(null);
+  const [rangeDragging, setRangeDragging] = useState(false);
   const [editingCell, setEditingCell] = useState(false);
   const [editText, setEditText] = useState("");
   const [drafts, setDrafts] = useState<Record<number, Record<string, string>>>({});
@@ -258,6 +287,7 @@ export default function OrdersPage() {
   const editTextRef = useRef("");
   const editingRef = useRef(false);
   const activeRef = useRef<CellAddr | null>(null);
+  const rangeDraggingRef = useRef(false);
   const draftsRef = useRef(drafts);
   const posRef = useRef(pos);
   const rowsRef = useRef<PurchaseOrder[]>([]);
@@ -265,6 +295,7 @@ export default function OrdersPage() {
   draftsRef.current = drafts;
   posRef.current = pos;
   editingRef.current = editingCell;
+  rangeDraggingRef.current = rangeDragging;
   const [stockingEmailFilterActive, setStockingEmailFilterActive] = useState(false);
   const [piDueFilterActive, setPiDueFilterActive] = useState(false);
 
@@ -554,6 +585,8 @@ export default function OrdersPage() {
     setDrafts(next);
   };
 
+  const clearRange = () => setRangeEnd(null);
+
   const moveActive = (dRow: number, dCol: number) => {
     const cell = activeRef.current;
     if (!cell) return;
@@ -567,8 +600,60 @@ export default function OrdersPage() {
     const next = { id: row.id, key: col.key as string };
     activeRef.current = next;
     setActiveCell(next);
+    clearRange();
     requestAnimationFrame(() => gridWrapRef.current?.focus({ preventScroll: true }));
   };
+
+  const startRangeAt = (addr: CellAddr, extend: boolean) => {
+    if (extend && activeRef.current) {
+      setRangeEnd(addr);
+      return;
+    }
+    commitActive();
+    activeRef.current = addr;
+    setActiveCell(addr);
+    setRangeEnd(addr);
+  };
+
+  useEffect(() => {
+    const endDrag = () => {
+      if (!rangeDraggingRef.current) return;
+      rangeDraggingRef.current = false;
+      setRangeDragging(false);
+    };
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+    return () => {
+      window.removeEventListener("pointerup", endDrag);
+      window.removeEventListener("pointercancel", endDrag);
+    };
+  }, []);
+
+  const rangeStats = useMemo(() => {
+    if (!activeCell || !rangeEnd) return null;
+    const bounds = selectionBounds(rows, activeCell, rangeEnd);
+    if (!bounds) return null;
+    const cellCount = (bounds.rMax - bounds.rMin + 1) * (bounds.cMax - bounds.cMin + 1);
+    if (cellCount <= 1) return null;
+    const nums: number[] = [];
+    for (let ri = bounds.rMin; ri <= bounds.rMax; ri++) {
+      const row = rows[ri];
+      if (!row) continue;
+      for (let ci = bounds.cMin; ci <= bounds.cMax; ci++) {
+        const col = COLUMNS[ci];
+        if (!col) continue;
+        const n = numericFromCell(col, cellRaw(row, col), drafts[row.id]?.[col.key as string]);
+        if (n != null) nums.push(n);
+      }
+    }
+    const sum = nums.reduce((a, b) => a + b, 0);
+    return {
+      cellCount,
+      numCount: nums.length,
+      sum,
+      avg: nums.length ? sum / nums.length : null,
+    };
+  }, [activeCell, rangeEnd, rows, drafts]);
 
   const beginEdit = (p: PurchaseOrder, col: Col, seed?: string) => {
     if (!canEdit()) return;
@@ -717,6 +802,7 @@ export default function OrdersPage() {
     } else if (e.key === "Escape") {
       setActiveCell(null);
       activeRef.current = null;
+      clearRange();
     } else if (canEdit() && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       beginEdit(p, col, e.key);
@@ -759,6 +845,8 @@ export default function OrdersPage() {
   const gridDirty = Object.keys(drafts).length > 0 || pendingEditDirty;
   const stockingOptions = master.stockingLocations ?? [];
   const portOptions = Array.from(new Set(Object.values(master.portsOfEntry ?? {}).filter(Boolean)));
+  const rangeBox =
+    activeCell && rangeEnd ? selectionBounds(rows, activeCell, rangeEnd) : null;
 
   if (loading) return <TableSkeleton rows={16} toolbar={false} fill />;
 
@@ -819,7 +907,7 @@ export default function OrdersPage() {
           ref={gridWrapRef}
           tabIndex={0}
           onKeyDown={onGridKeyDown}
-          className="min-h-0 flex-1 overflow-auto outline-none"
+          className={`min-h-0 flex-1 overflow-auto outline-none${rangeDragging ? " select-none" : ""}`}
           onScroll={() => {
             if (openCol) closeFilter(false);
           }}
@@ -883,7 +971,7 @@ export default function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((p) => {
+              {rows.map((p, rowIndex) => {
                 const payAlert = paymentRowAlert(p, master);
                 const rowTone = payAlert
                   ? payAlert.kind === "under"
@@ -904,7 +992,7 @@ export default function OrdersPage() {
                     className={rowTone}
                     title={payAlert?.title}
                   >
-                    {COLUMNS.map((col) => {
+                    {COLUMNS.map((col, colIndex) => {
                       const key = col.key as string;
                       const freezeAt = FROZEN_KEYS.indexOf(key);
                       const freezeClass =
@@ -913,6 +1001,14 @@ export default function OrdersPage() {
                           : `freeze freeze-${freezeAt}${freezeAt === FROZEN_KEYS.length - 1 ? " freeze-last" : ""}`;
                       const draft = drafts[p.id]?.[key];
                       const isActive = activeCell?.id === p.id && activeCell.key === key;
+                      const inRange = !!(
+                        rangeBox &&
+                        rowIndex >= rangeBox.rMin &&
+                        rowIndex <= rangeBox.rMax &&
+                        colIndex >= rangeBox.cMin &&
+                        colIndex <= rangeBox.cMax &&
+                        (rangeBox.rMax > rangeBox.rMin || rangeBox.cMax > rangeBox.cMin)
+                      );
                       const isEditing = isActive && editingCell && canEdit();
                       const listId =
                         col.type === "bool"
@@ -970,7 +1066,23 @@ export default function OrdersPage() {
                       return (
                       <td
                         key={key}
-                        className={`${freezeClass}${col.tone === "finance" ? " td-finance" : ""}${NUMERIC_TYPES.includes(col.type) ? " text-right tabular-nums" : ""}${isActive ? " cell-active" : ""}${draft !== undefined ? " cell-dirty" : ""}${isEditing ? " cell-editing" : ""}${key === "poNo" || key === "status" || key === "priority" || TOGGLE_KEYS.has(key) ? " cursor-pointer" : canEdit() ? " cursor-cell" : ""}`}
+                        className={`${freezeClass}${col.tone === "finance" ? " td-finance" : ""}${NUMERIC_TYPES.includes(col.type) ? " text-right tabular-nums" : ""}${isActive ? " cell-active" : ""}${inRange ? " cell-range" : ""}${draft !== undefined ? " cell-dirty" : ""}${isEditing ? " cell-editing" : ""}${key === "poNo" || key === "status" || key === "priority" || TOGGLE_KEYS.has(key) ? " cursor-pointer" : canEdit() ? " cursor-cell" : ""}`}
+                        onPointerDown={(e) => {
+                          if (e.button !== 0) return;
+                          if ((e.target as HTMLElement).closest("a, button, input, .cell-editor, .stage-pill")) return;
+                          if (editingRef.current) return;
+                          if (e.shiftKey && activeRef.current) {
+                            setRangeEnd({ id: p.id, key });
+                            return;
+                          }
+                          rangeDraggingRef.current = true;
+                          setRangeDragging(true);
+                          startRangeAt({ id: p.id, key }, false);
+                        }}
+                        onPointerEnter={() => {
+                          if (!rangeDraggingRef.current) return;
+                          setRangeEnd({ id: p.id, key });
+                        }}
                         onClick={(e) => {
                           e.stopPropagation();
                           if (key === "isf" || key === "revisionSent") {
@@ -986,6 +1098,7 @@ export default function OrdersPage() {
                             const next = { id: p.id, key };
                             activeRef.current = next;
                             setActiveCell(next);
+                            clearRange();
                             if (canEdit()) setStatusPo(p);
                             return;
                           }
@@ -994,11 +1107,16 @@ export default function OrdersPage() {
                             const next = { id: p.id, key };
                             activeRef.current = next;
                             setActiveCell(next);
+                            clearRange();
                             setSelected(p);
                             gridWrapRef.current?.focus({ preventScroll: true });
                             return;
                           }
-                          if (canEdit() && activeRef.current?.id === p.id && activeRef.current.key === key) {
+                          if (e.shiftKey) {
+                            gridWrapRef.current?.focus({ preventScroll: true });
+                            return;
+                          }
+                          if (canEdit() && activeRef.current?.id === p.id && activeRef.current.key === key && !inRange) {
                             beginEdit(p, col);
                             return;
                           }
@@ -1006,6 +1124,7 @@ export default function OrdersPage() {
                           const next = { id: p.id, key };
                           activeRef.current = next;
                           setActiveCell(next);
+                          setRangeEnd(next);
                           gridWrapRef.current?.focus({ preventScroll: true });
                         }}
                         onDoubleClick={(e) => {
@@ -1016,6 +1135,7 @@ export default function OrdersPage() {
                           }
                           if (key === "priority" || TOGGLE_KEYS.has(key)) return;
                           if (key === "poNo" || !canEdit()) return;
+                          clearRange();
                           beginEdit(p, col);
                         }}
                       >
@@ -1073,6 +1193,39 @@ export default function OrdersPage() {
             ))}
           </datalist>
         </div>
+        {rangeStats && (
+          <div
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-200 bg-slate-50 px-3 py-2 text-sm tabular-nums text-slate-700"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="text-slate-500">{rangeStats.cellCount} cells</span>
+            {rangeStats.numCount > 0 ? (
+              <>
+                <span>
+                  <span className="text-slate-500">Sum </span>
+                  <span className="font-semibold text-slate-900">
+                    {rangeStats.sum.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-slate-500">Count </span>
+                  <span className="font-medium">{rangeStats.numCount}</span>
+                </span>
+                {rangeStats.avg != null && (
+                  <span>
+                    <span className="text-slate-500">Avg </span>
+                    <span className="font-medium">
+                      {rangeStats.avg.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </span>
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-slate-500">No numeric values in selection</span>
+            )}
+          </div>
+        )}
       </div>
 
       {openCol && popPos && (

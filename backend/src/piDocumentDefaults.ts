@@ -41,7 +41,7 @@ export const DEFAULT_PI_DOCUMENT: PiDocumentSettings = {
   terms: [
     "Tolerance in Material: Aluminium Skin: +/- 0.05mm, +/- 2.0mm, Length: +/- 4.0mm, Thickness: +/- 0.2mm for 4MM",
     "Tolerance in Quantity: Total Quantity Would Be (+)0-2% Subject to Production Run",
-    "Tolerance in Color Between Batches: Color Variation b/w Batches: dE <= 2.0",
+    "Tolerance in Color Between Batches: Color Variation b/w Batches: \u0394E <= 2.0",
     "Tolerance in Surface Defects: if not visible from 3ft. distance, quality is acceptable.",
   ],
   taxNote:
@@ -57,12 +57,26 @@ export function parsePiDocument(master: unknown): PiDocumentSettings {
   return doc as PiDocumentSettings;
 }
 
+/**
+ * Color tolerance should read ΔE. Older master rows stored ASCII "dE", and a
+ * prior PDF pass dropped the Greek delta entirely, leaving a bare "E".
+ */
+function normalizePiTerms(terms: string[]): string[] {
+  return terms.map((t) =>
+    t
+      .replace(/\u2206E/g, "\u0394E")
+      .replace(/\bdE\b/g, "\u0394E")
+      .replace(/(Batches:\s*)E(\s*(?:<=|≤|<))/gi, "$1\u0394E$2"),
+  );
+}
+
 export function resolvePiDocument(company: Company, master?: unknown): Required<PiDocumentSettings> {
   const cfg = parsePiDocument(master);
+  const terms = cfg.terms?.length ? cfg.terms : DEFAULT_PI_DOCUMENT.terms!;
   return {
     ...DEFAULT_PI_DOCUMENT,
     ...cfg,
-    terms: cfg.terms?.length ? cfg.terms : DEFAULT_PI_DOCUMENT.terms!,
+    terms: normalizePiTerms(terms),
     customerName:
       cfg.customerName ?? (company === "SYNERGY" ? SYNERGY_CUSTOMER : DEFAULT_PI_DOCUMENT.customerName!),
   } as Required<PiDocumentSettings>;

@@ -159,7 +159,7 @@ export default function StageMilestoneEditor({
       const derived = derivedPlanningDate(po, master.leadDays);
       if (derived) next.planningDate = derived;
     }
-    if (stageId === "PI Generated" && !next.piNo) {
+    if ((stageId === "PI Generated" || stageId === "PI Approved") && !next.piNo) {
       const { value } = await api.getNextDocNo("pi", po.id);
       next.piNo = value;
     }

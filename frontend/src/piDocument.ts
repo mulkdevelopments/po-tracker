@@ -39,7 +39,7 @@ export const DEFAULT_PI_DOCUMENT: PiDocumentSettings = {
   terms: [
     "Tolerance in Material: Aluminium Skin: +/- 0.05mm, +/- 2.0mm, Length: +/- 4.0mm, Thickness: +/- 0.2mm for 4MM",
     "Tolerance in Quantity: Total Quantity Would Be (+)0-2% Subject to Production Run",
-    "Tolerance in Color Between Batches: Color Variation b/w Batches: dE <= 2.0",
+    "Tolerance in Color Between Batches: Color Variation b/w Batches: \u0394E <= 2.0",
     "Tolerance in Surface Defects: if not visible from 3ft. distance, quality is acceptable.",
   ],
   taxNote:

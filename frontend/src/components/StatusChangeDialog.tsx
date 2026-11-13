@@ -77,6 +77,18 @@ export default function StatusChangeDialog({ po, master, onClose, onSaved }: Pro
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  useEffect(() => {
+    if (stageId !== "PI Approved" || fields.piNo?.trim() || po.piNo?.trim()) return;
+    let cancelled = false;
+    void api.getNextDocNo("pi", po.id, po.company).then(({ value }) => {
+      if (cancelled) return;
+      setFields((prev) => (prev.piNo?.trim() ? prev : { ...prev, piNo: value }));
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [stageId, po.id, po.company, po.piNo, fields.piNo]);
+
   const setField = (key: string, value: string) => {
     setFields((prev) => {
       const next = { ...prev, [key]: value };
@@ -113,11 +125,13 @@ export default function StatusChangeDialog({ po, master, onClose, onSaved }: Pro
         next.productionSite = po.productionSite || master.defaultProductionSite || master.uaeSites?.[0] || "";
       }
     }
-    if (stageId === "PI Generated") {
+    if (stageId === "PI Generated" || stageId === "PI Approved") {
       if (!next.piNo) {
         const { value } = await api.getNextDocNo("pi", po.id, po.company);
         next.piNo = value;
       }
+    }
+    if (stageId === "PI Generated") {
       if (!next.piDate) next.piDate = todayISO();
       if (!next.piValue && (po.piValue != null || po.poValue != null)) {
         next.piValue = String(po.piValue ?? po.poValue);

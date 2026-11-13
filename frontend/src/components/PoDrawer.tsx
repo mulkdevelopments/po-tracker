@@ -15,7 +15,9 @@ import {
 } from "../workflows";
 import MoneyInput from "./MoneyInput";
 import PiPdfPreview from "./PiPdfPreview";
+import PiSendDialog from "./PiSendDialog";
 import PipelineStepActions from "./PipelineStepActions";
+import { canMarkPiEmailRole } from "../piEmail";
 import StageMilestoneEditor from "./StageMilestoneEditor";
 import { DRAWER_SECTIONS as EDIT_SECTIONS, lineColsFor } from "../poFields";
 import { LINE_RECOMPUTE_KEYS, lineFormTotals } from "../lineMath";
@@ -667,7 +669,9 @@ export default function PoDrawer({ po, user, master, onClose, onUpdated, onDelet
               </div>
             ) : null}
 
-            {tab === "documents" && <OrderDocuments po={po} />}
+            {tab === "documents" && (
+              <OrderDocuments po={po} user={user} master={master} onUpdated={onUpdated} />
+            )}
 
             {tab === "details" && (
               <div className="px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1098,6 +1102,7 @@ function AdvanceButton({
       { k: "piValue", label: "PI Value (USD)", type: "number" },
     ],
     "PI Approved": [
+      { k: "piNo", label: "PI Number", type: "text", autoNo: true, auto: true },
       { k: "piApprovedDate", label: "Approval Date", type: "date", autoDate: true },
     ],
     "PI Sent": [
@@ -1189,7 +1194,7 @@ function AdvanceButton({
         const loc = matchStockingLocation(locations, initial.stockingLocation ?? po.stockingLocation ?? "");
         if (loc) initial.stockingLocation = loc.name;
       }
-      if (nextStage === "PI Generated" && !initial.piNo) {
+      if ((nextStage === "PI Generated" || nextStage === "PI Approved") && !initial.piNo) {
         const { value } = await api.getNextDocNo("pi", po.id, po.company);
         initial.piNo = value;
       }
@@ -1759,7 +1764,19 @@ function ResubmitCiButton({
   );
 }
 
-function OrderDocuments({ po }: { po: PurchaseOrder }) {
+function OrderDocuments({
+  po,
+  user,
+  master,
+  onUpdated,
+}: {
+  po: PurchaseOrder;
+  user: AuthUser;
+  master: MasterData;
+  onUpdated: (po: PurchaseOrder) => void;
+}) {
+  const [sendOpen, setSendOpen] = useState(false);
+  const canSendPi = canMarkPiEmailRole(user.role) && !!po.piNo?.trim();
   const files = [
     po.piNo?.trim()
       ? {
@@ -1810,6 +1827,15 @@ function OrderDocuments({ po }: { po: PurchaseOrder }) {
                   label="Preview"
                 />
                 <PiPdfDownload poId={po.id} piNo={po.piNo} poNo={po.poNo} company={po.company} />
+                {canSendPi && (
+                  <button
+                    type="button"
+                    onClick={() => setSendOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100"
+                  >
+                    Send invoice
+                  </button>
+                )}
               </>
             ) : (
               <CiExcelDownload poId={po.id} ciNo={po.ciNo} company={po.company} />
@@ -1817,6 +1843,15 @@ function OrderDocuments({ po }: { po: PurchaseOrder }) {
           </div>
         </div>
       ))}
+      {sendOpen && (
+        <PiSendDialog
+          po={po}
+          user={user}
+          master={master}
+          onUpdated={onUpdated}
+          onClose={() => setSendOpen(false)}
+        />
+      )}
     </div>
   );
 }

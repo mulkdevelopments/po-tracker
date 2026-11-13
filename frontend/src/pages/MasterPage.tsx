@@ -601,7 +601,7 @@ function PiEmailsCard({
   return (
     <div className="space-y-3 text-sm">
       <p className="text-xs text-slate-500">
-        Comma-separated internal emails for Proforma Invoice distribution (mailto from the PO drawer).
+        Comma-separated internal emails for Proforma Invoice distribution. Shown as a checklist when sending from the PO drawer Documents tab.
       </p>
       <input
         type="text"

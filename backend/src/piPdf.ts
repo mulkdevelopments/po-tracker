@@ -131,10 +131,20 @@ const WINANSI_EXTRAS = new Set([
   0x017d, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a,
   0x0153, 0x017e, 0x0178,
 ]);
+/**
+ * Helvetica cannot draw Greek Δ. Keep a sentinel through wrap/measure, then paint
+ * the Symbol-font Delta (byte 0x44) when the line is drawn.
+ */
+const DELTA_MARK = "\u0001";
+/** Symbol font encodes Greek Δ / math increment directly. */
+const SYMBOL_DELTA = "\u0394";
 const SUBSTITUTES: Record<string, string> = {
   "\u2264": "<=",
   "\u2265": ">=",
-  "\u0394": "Delta ",
+  "\u0394": DELTA_MARK, // Greek capital letter Delta
+  "\u2206": DELTA_MARK, // increment / math delta
+  "\u25b3": DELTA_MARK, // white up-pointing triangle
+  "\u25b2": DELTA_MARK, // black up-pointing triangle
   "\u2212": "-",
   "\u00a0": " ",
   "\u2033": '"',
@@ -145,6 +155,10 @@ const SUBSTITUTES: Record<string, string> = {
 function safe(text: string): string {
   let out = "";
   for (const ch of text) {
+    if (ch === DELTA_MARK) {
+      out += ch;
+      continue;
+    }
     const sub = SUBSTITUTES[ch];
     if (sub != null) {
       out += sub;
@@ -156,6 +170,41 @@ function safe(text: string): string {
     }
   }
   return out;
+}
+
+function widthWithDelta(font: PDFFont, symbol: PDFFont, body: string, size: number): number {
+  let w = 0;
+  const parts = body.split(DELTA_MARK);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i]) w += font.widthOfTextAtSize(parts[i], size);
+    if (i < parts.length - 1) w += symbol.widthOfTextAtSize(SYMBOL_DELTA, size);
+  }
+  return w;
+}
+
+function drawWithDelta(
+  page: PDFPage,
+  body: string,
+  x: number,
+  y: number,
+  font: PDFFont,
+  symbol: PDFFont,
+  size: number,
+  color: RGB,
+): number {
+  let cursor = x;
+  const parts = body.split(DELTA_MARK);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i]) {
+      page.drawText(parts[i], { x: cursor, y, size, font, color });
+      cursor += font.widthOfTextAtSize(parts[i], size);
+    }
+    if (i < parts.length - 1) {
+      page.drawText(SYMBOL_DELTA, { x: cursor, y, size, font: symbol, color });
+      cursor += symbol.widthOfTextAtSize(SYMBOL_DELTA, size);
+    }
+  }
+  return cursor;
 }
 
 function fmtPiDate(iso?: string | null): string {
@@ -225,14 +274,20 @@ function amountInWords(amount: number): string {
   return words;
 }
 
-function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
+function wrapText(
+  text: string,
+  font: PDFFont,
+  symbol: PDFFont,
+  size: number,
+  maxWidth: number,
+): string[] {
   const words = safe(text).split(/\s+/).filter(Boolean);
   if (!words.length) return [""];
   const lines: string[] = [];
   let current = "";
   for (const word of words) {
     const test = current ? `${current} ${word}` : word;
-    if (font.widthOfTextAtSize(test, size) <= maxWidth) current = test;
+    if (widthWithDelta(font, symbol, test, size) <= maxWidth) current = test;
     else {
       if (current) lines.push(current);
       current = word;
@@ -252,6 +307,7 @@ interface Ctx {
   bold: PDFFont;
   boldItalic: PDFFont;
   italic: PDFFont;
+  symbol: PDFFont;
   /** Current baseline, in points from the top of the page. */
   y: number;
   /** Measuring pass: keep the metrics, skip the ink and the page breaks. */
@@ -288,12 +344,16 @@ function text(ctx: Ctx, value: string, x: number, y: number, opts: TextOpts = {}
   const font = opts.font ?? ctx.font;
   const size = opts.size ?? BODY_SIZE;
   const body = safe(value);
-  const w = font.widthOfTextAtSize(body, size);
+  const w = widthWithDelta(font, ctx.symbol, body, size);
   let tx = x;
   if (opts.align === "right") tx = x + (opts.width ?? 0) - w;
   else if (opts.align === "center") tx = x + ((opts.width ?? 0) - w) / 2;
   if (!ctx.dry) {
-    ctx.page.drawText(body, { x: tx, y: PAGE_H - y, size, font, color: opts.color ?? BLACK });
+    if (body.includes(DELTA_MARK)) {
+      drawWithDelta(ctx.page, body, tx, PAGE_H - y, font, ctx.symbol, size, opts.color ?? BLACK);
+    } else {
+      ctx.page.drawText(body, { x: tx, y: PAGE_H - y, size, font, color: opts.color ?? BLACK });
+    }
   }
   return tx + w;
 }
@@ -497,7 +557,13 @@ function drawPi(ctx: Ctx, po: PoForPi, cfg: PiConfig, lift: number): number {
     totalM2 += m2;
     grossTotal += total;
 
-    const descLines = wrapText(lineDescription(line), ctx.font, TABLE_SIZE, COLS.desc.w - CELL_PAD * 2);
+    const descLines = wrapText(
+      lineDescription(line),
+      ctx.font,
+      ctx.symbol,
+      TABLE_SIZE,
+      COLS.desc.w - CELL_PAD * 2,
+    );
     let rowH = Math.max(ROW_H, descLines.length * 9 + 3);
     if (!ctx.dry && ctx.y + rowH > CONTENT_BOTTOM) {
       startPage(ctx);
@@ -615,13 +681,13 @@ function drawPi(ctx: Ctx, po: PoForPi, cfg: PiConfig, lift: number): number {
   sectionHeading(ctx, "Terms & Conditions", LABEL_X, ctx.y, false);
   ctx.y += 12;
   for (const term of cfg.terms) {
-    const lines = wrapText(`>> ${term}`, ctx.font, BODY_SIZE, TABLE_RIGHT - 63);
+    const lines = wrapText(`>> ${term}`, ctx.font, ctx.symbol, BODY_SIZE, TABLE_RIGHT - 63);
     ensure(ctx, lines.length * ROW_STEP);
     lines.forEach((l, i) => text(ctx, l, i === 0 ? 63 : 70, ctx.y + i * 9, {}));
     ctx.y += lines.length * ROW_STEP;
   }
 
-  const noteLines = wrapText(cfg.taxNote, ctx.italic, NOTE_SIZE, TABLE_W);
+  const noteLines = wrapText(cfg.taxNote, ctx.italic, ctx.symbol, NOTE_SIZE, TABLE_W);
   ensure(ctx, noteLines.length * 9.5 + 10);
   noteLines.forEach((l, i) => {
     text(ctx, l, TABLE_X, ctx.y + i * 9.5, {
@@ -685,6 +751,7 @@ export async function generatePiPdf(
     bold: await pdf.embedFont(StandardFonts.HelveticaBold),
     boldItalic: await pdf.embedFont(StandardFonts.HelveticaBoldOblique),
     italic: await pdf.embedFont(StandardFonts.HelveticaOblique),
+    symbol: await pdf.embedFont(StandardFonts.Symbol),
     y: 0,
     dry: true,
     pageCount: 0,

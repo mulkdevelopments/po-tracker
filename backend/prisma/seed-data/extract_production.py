@@ -23,6 +23,7 @@ OUT = Path(__file__).resolve().parent / "production.json"
 FIELD_ALIASES = {
     "poNo": ("PO#", "PO #", "PO"),
     "rev": ("Rev#", "Rev #", "Rev"),
+    "piNo": ("PI ", "PI#", "PI #", "PI"),
     "soNo": ("SO", "SO#", "SO #"),
     "standardColorsOnly": ("Standard Colors Only?", "Standard Colors Only", "Colors Only?"),
     "allMaterialAvailable": ("All Material Available",),
@@ -63,6 +64,26 @@ def cell(v):
         s = v.strip()
         return s if s else None
     return str(v).strip() or None
+
+
+def lines_of(v):
+    """Split a cell that Abitha sometimes stacks with Alt+Enter."""
+    raw = cell(v)
+    if not raw:
+        return []
+    return [part.strip() for part in raw.replace("\r", "\n").split("\n") if part.strip()]
+
+
+def first_doc(v, prefer=None):
+    """Primary document number from a stacked PI/SO cell."""
+    parts = lines_of(v)
+    if not parts:
+        return None
+    if prefer:
+        for part in parts:
+            if prefer in part.upper():
+                return part
+    return parts[0]
 
 
 def as_int(v):
@@ -144,7 +165,14 @@ def main():
     ws_styles = wb_styles[sheet]
     header_row = find_header_row(ws)
     headers = header_map(ws, header_row)
-    cols = {field: col(headers, *aliases) for field, aliases in FIELD_ALIASES.items()}
+    cols = {}
+    for field, aliases in FIELD_ALIASES.items():
+        try:
+            cols[field] = col(headers, *aliases)
+        except KeyError:
+            if field == "piNo":
+                continue
+            raise
 
     rows = []
     seq = 0
@@ -159,10 +187,15 @@ def main():
         status = cell(ws.cell(r, cols["productionStatus"]).value)
         if isinstance(status, str):
             status = status.strip() or None
+        # Abitha sometimes stacks a later SO under PI / SO with Alt+Enter.
+        # Keep the primary document only so the grid does not show the second line.
+        pi_no = first_doc(ws.cell(r, cols["piNo"]).value, prefer="NX/PI") if "piNo" in cols else None
+        so_no = first_doc(ws.cell(r, cols["soNo"]).value)
         rows.append({
             "poNo": str(po).strip(),
             "rev": as_int(ws.cell(r, cols["rev"]).value) or 0,
-            "soNo": cell(ws.cell(r, cols["soNo"]).value),
+            "piNo": pi_no,
+            "soNo": so_no,
             "standardColorsOnly": cell(ws.cell(r, cols["standardColorsOnly"]).value),
             "allMaterialAvailable": cell(ws.cell(r, cols["allMaterialAvailable"]).value),
             "productionBegin": begin,
@@ -188,6 +221,11 @@ def main():
         sum(1 for r in rows if r["productionCompleteConfirmed"]),
         sum(1 for r in rows if r["dispatchConfirmed"]),
     )
+    print("pi numbers:", sum(1 for r in rows if r.get("piNo")))
+    print("stacked cells cleaned:", sum(
+        1 for r in rows
+        if r.get("soNo") and "\n" not in str(r.get("soNo"))
+    ), "SO /", sum(1 for r in rows if r.get("piNo")), "PI")
 
 
 if __name__ == "__main__":

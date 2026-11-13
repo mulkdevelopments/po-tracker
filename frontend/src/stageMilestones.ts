@@ -26,6 +26,7 @@ export function getStageFieldDefs(master: MasterData): Record<string, StageField
       { k: "piValue", label: "PI Value (USD)", type: "number" },
     ],
     "PI Approved": [
+      { k: "piNo", label: "PI Number", type: "text", autoNo: true, auto: true },
       { k: "piApprovedDate", label: "Approval Date", type: "date", autoDate: true },
     ],
     "PI Sent": [

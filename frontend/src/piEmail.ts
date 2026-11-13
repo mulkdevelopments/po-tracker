@@ -10,14 +10,16 @@ export function parsePiInternalEmails(raw: unknown): string[] {
     .filter((s) => s.includes("@"));
 }
 
-export function buildPiMailto(po: PurchaseOrder, to: string[]): string {
-  const toList = to.join(",");
+export function buildPiMailto(po: PurchaseOrder, to: string[], filename?: string): string {
   const start = plannedProductionStart(po);
   const subject = `Proforma Invoice — PO ${po.poNo}${po.piNo ? ` / PI ${po.piNo}` : ""}`;
+  const attachHint = filename
+    ? `Please find the Proforma Invoice attached (${filename}). If it is not attached yet, add the PDF that was just downloaded.`
+    : "Please find the Proforma Invoice for review (PDF downloaded from PO Tracker — attach to this email).";
   const body = [
     "Team,",
     "",
-    "Please find the Proforma Invoice for review (PDF downloaded from PO Tracker — attach to this email).",
+    attachHint,
     "",
     `PO Number: ${po.poNo}`,
     `Rev: ${po.rev ?? 0}`,
@@ -33,7 +35,8 @@ export function buildPiMailto(po: PurchaseOrder, to: string[]): string {
   const params = new URLSearchParams();
   params.set("subject", subject);
   params.set("body", body);
-  return `mailto:${encodeURIComponent(toList)}?${params.toString()}`;
+  const toList = to.map((addr) => encodeURIComponent(addr)).join(",");
+  return `mailto:${toList}?${params.toString()}`;
 }
 
 export function canMarkPiEmailRole(role: string | undefined): boolean {

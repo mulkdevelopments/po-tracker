@@ -2,9 +2,10 @@ import { useState } from "react";
 import { api } from "../api";
 import type { AuthUser, MasterData, PurchaseOrder } from "../types";
 import { fmtDate } from "../utils";
-import { buildPiMailto, canMarkPiEmailRole, parsePiInternalEmails } from "../piEmail";
+import { canMarkPiEmailRole, parsePiInternalEmails } from "../piEmail";
 import { plannedProductionStart } from "../productionSchedule";
 import PiPdfPreview from "./PiPdfPreview";
+import PiSendDialog from "./PiSendDialog";
 
 interface Props {
   po: PurchaseOrder;
@@ -15,6 +16,7 @@ interface Props {
 
 export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
   const [busy, setBusy] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
 
   if (!canMarkPiEmailRole(user.role) || !po.piNo?.trim()) return null;
 
@@ -58,7 +60,7 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
             <div className="text-sm font-semibold text-sky-950">Email PI — internal</div>
             <p className="text-xs text-sky-800 mt-0.5">
               {approved
-                ? "Preview the approved PI, then send it from the tracker or download and mail it yourself."
+                ? "Preview the approved PI, then send it from the tracker or open Outlook with selected recipients."
                 : "The PI has to be approved before it can be emailed from the tracker."}
             </p>
           </div>
@@ -110,12 +112,13 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
             </button>
           )}
           {emails.length > 0 && (
-            <a
-              href={buildPiMailto(po, emails)}
+            <button
+              type="button"
+              onClick={() => setSendOpen(true)}
               className="px-3 py-1.5 text-xs rounded-md border border-sky-400 bg-white text-sky-900 hover:bg-sky-100"
             >
-              Open in mail client
-            </a>
+              Open in Outlook
+            </button>
           )}
           {!sent && (
             <button
@@ -129,6 +132,15 @@ export default function PiEmailQueue({ po, user, master, onUpdated }: Props) {
           )}
         </div>
       </div>
+      {sendOpen && (
+        <PiSendDialog
+          po={po}
+          user={user}
+          master={master}
+          onUpdated={onUpdated}
+          onClose={() => setSendOpen(false)}
+        />
+      )}
     </div>
   );
 }
